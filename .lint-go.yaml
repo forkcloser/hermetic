@@ -1,0 +1,43 @@
+# This project's carve-outs from the Go lint baseline (.limen/lint-go.yaml):
+# the baseline's sections, in its shape, holding only what this project adds,
+# changes or takes out. `just do lint go` renders the two on every run
+# (book/linting-go.md, "one baseline, per-project carve-outs"). Seeded once;
+# the file is the project's own.
+golangci:
+  linters:
+    settings:
+      depguard:
+        rules:
+          main:
+            allow:
+              # aqua, the library hermetic is built from, and the two
+              # helpers its own main uses to run it.
+              - github.com/aquaproj/aqua/v2/
+              - github.com/suzuki-shunsuke/slog-util/
+              - github.com/suzuki-shunsuke/urfave-cli-v3-util/
+              # The command tree is assembled here from the library's own commands.
+              - github.com/urfave/cli/v3
+              # The exit-code error the library's own exec uses, so a tool's exit
+              # code on Windows comes out as the library's would.
+              - github.com/suzuki-shunsuke/go-error-with-exit-code/
+              # The fleet's library: the platform's directories and permissions.
+              - github.com/mycophonic/primordium/
+      wrapcheck:
+        ignore-package-globs:
+          # The library's error from a run IS the command's result, reported
+          # as aqua reports it; a wrapper would prefix every message a user sees.
+          - github.com/aquaproj/aqua/v2/*
+licenses:
+  # Replaces the baseline's list. aqua's dependency graph carries MPL-2.0
+  # (hashicorp's go-cleanhttp, go-version, golang-lru; suzuki-shunsuke's
+  # go-retryablehttp), file-level copyleft that binds a change to those files
+  # and nothing of ours, and 0BSD (mikelolasagasti/xz), a public-domain-like
+  # grant, which the checker spells BSD-0-Clause. Both ship inside
+  # hermetic as they ship inside aqua.
+  allowed:
+    - Apache-2.0
+    - BSD-2-Clause
+    - BSD-3-Clause
+    - MIT
+    - MPL-2.0
+    - BSD-0-Clause
