@@ -20,6 +20,7 @@ import (
 // the mirror after; and the dispatch, which resolves a tool through the
 // library and then runs it itself.
 func Main(version string) {
+	useTransporter()
 	urfave.Main(Name, version, Run, "env", aquaruntime.New(context.Background()).Env())
 }
 
