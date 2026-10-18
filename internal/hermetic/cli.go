@@ -36,16 +36,15 @@ type grammar struct {
 	VersionCommand versionCmd        `cmd:""        help:"Show the version."                                    name:"version"`
 }
 
-// library is what a command runs with: the library's logger and runtime, the
-// parameters the binary derived for the library, and the stream a command
-// answers on. A command copies the parameters before it fills its own fields.
+// library is what a command runs the library with: its logger and runtime, the
+// parameters the binary derived for it, and the stream a command answers on. A command copies the parameters before it
+// fills its own fields.
 type library struct {
 	logger  *slog.Logger
 	root    Root
 	runtime *aquaruntime.Runtime
 	base    *config.Param
 	stdout  io.Writer
-	version string
 }
 
 func (lib *library) param() *config.Param {
@@ -261,12 +260,13 @@ func (*rootDirCmd) Run(lib *library) error {
 }
 
 // versionCmd is `version`, the --version flag's twin for a script that passes
-// a command.
+// a command. It takes the invocation, not the library: a version needs no
+// root.
 type versionCmd struct{}
 
 // Run prints the version.
-func (*versionCmd) Run(lib *library) error {
-	fmt.Fprintln(lib.stdout, lib.version)
+func (*versionCmd) Run(env *Env) error {
+	fmt.Fprintln(env.Stdout, env.Version)
 
 	return nil
 }

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -160,4 +161,40 @@ func distinct(names []string) []string {
 	slices.Sort(names)
 
 	return slices.Compact(names)
+}
+
+// TestNoRootForVersionAndUsage holds the version, the usage and a usage error
+// to needing no root: with the default root unmakeable, the home (and
+// LOCALAPPDATA, which Windows reads first) a file, each answers, where a
+// library command, which needs the root, fails on it.
+func TestNoRootForVersionAndUsage(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv(hermetic.RootEnv, "")
+	t.Setenv("HOME", file)
+	t.Setenv("LOCALAPPDATA", file)
+	// Linux reads this ahead of the home when it is set and absolute.
+	t.Setenv("XDG_DATA_HOME", "")
+	t.Chdir(t.TempDir())
+
+	for _, args := range [][]string{{"--version"}, {"version"}, {"--help"}, {"bogus"}} {
+		out, err := invoke(t, args...)
+
+		var asked shutdown.ExitError
+
+		switch {
+		case args[0] == "bogus" && (!errors.As(err, &asked) || asked != 1):
+			t.Fatalf("%q: err = %v, want exit status 1\n%s", args, err, out)
+		case args[0] != "bogus" && err != nil:
+			t.Fatalf("%q: %v\n%s", args, err, out)
+		}
+	}
+
+	// The control: the root is still what a library command needs.
+	if out, err := invoke(t, "root-dir"); err == nil {
+		t.Fatalf("root-dir answered without a root: %s", out)
+	}
 }

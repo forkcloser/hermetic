@@ -74,22 +74,19 @@ func versionOf(stamped string) string {
 	return "unknown"
 }
 
-// Run is one invocation of the binary: the root, the environment, the project
-// walk and its gate before the library runs, the mirror after. Under its own
-// name the binary parses its grammar and runs the command named; under any
-// other name, through a link, it resolves that tool through the library and
-// runs it itself.
+// Run is one invocation of the binary. Under its own name the binary parses
+// its grammar and runs the command named; under any other name, through a
+// link, it resolves that tool through the library and runs it itself. The
+// library, with the root, the environment, the project walk and its gate, is
+// made when a command asks for it: a version, a usage or a usage error asks
+// for none, so each answers where the root cannot be made.
 func Run(ctx context.Context, env *Env) error {
-	root, err := RootFrom(env.Getenv)
-	if err != nil {
-		return err
-	}
-
 	tool, toolArgs := Dispatched(env.Args, runtime.GOOS)
 
 	var (
 		cli  grammar
 		kctx *kong.Context
+		err  error
 	)
 
 	level := env.Getenv(LogLevelEnv)
@@ -118,41 +115,29 @@ func Run(ctx context.Context, env *Env) error {
 
 	log := slog.Default()
 
-	keepsGate := kctx != nil && strings.HasPrefix(kctx.Command(), "policy")
-
-	set, unset, err := environment(log, root, cli.Config != "", keepsGate, os.Environ())
-	if err != nil {
-		return err
-	}
-	// The library's view: the process environment, which the verifiers it runs
-	// inherit, sees ours and nothing scrubbed. The shell's own is kept for the
-	// tool a dispatch runs.
-	shell := os.Environ()
-
-	if applyErr := apply(set, unset); applyErr != nil {
-		return applyErr
-	}
-
-	base, err := libraryParam(log, root, set, env.Version, cli.Config, level)
-	if err != nil {
-		return err
-	}
-
-	lib := &library{
-		logger:  log,
-		root:    root,
-		runtime: aquaruntime.New(ctx),
-		base:    base,
-		stdout:  env.Stdout,
-		version: env.Version,
-	}
-
 	if tool == "" {
-		if runErr := kctx.Run(lib); runErr != nil {
+		keepsGate := strings.HasPrefix(kctx.Command(), "policy")
+
+		bindErr := kctx.BindToProvider(func() (*library, error) {
+			return newLibrary(ctx, log, env, cli.Config, keepsGate, level)
+		})
+		if bindErr != nil {
+			return fmt.Errorf("bind the library: %w", bindErr)
+		}
+
+		if runErr := kctx.Run(); runErr != nil {
 			return fmt.Errorf("%s: %w", kctx.Command(), runErr)
 		}
 
 		return nil
+	}
+	// The shell's own environment, kept for the tool a dispatch runs: the
+	// library's run scrubs and sets the process's.
+	shell := os.Environ()
+
+	lib, err := newLibrary(ctx, log, env, "", false, level)
+	if err != nil {
+		return err
 	}
 
 	path, err := resolve(ctx, lib, tool)
@@ -160,9 +145,48 @@ func Run(ctx context.Context, env *Env) error {
 		return err
 	}
 
-	syncBin(ctx, log, root)
+	syncBin(ctx, log, lib.root)
 
 	return execTool(ctx, path, tool, toolArgs, ToolEnvironment(shell))
+}
+
+// newLibrary is the library as a command runs it: the root, the environment
+// applied to the process, which the verifiers the library runs inherit, the
+// project walk and its gate, and the parameters derived from that environment.
+func newLibrary(
+	ctx context.Context,
+	log *slog.Logger,
+	env *Env,
+	configFlag string,
+	keepsGate bool,
+	level string,
+) (*library, error) {
+	root, err := RootFrom(env.Getenv)
+	if err != nil {
+		return nil, err
+	}
+
+	set, unset, err := environment(log, root, configFlag != "", keepsGate, os.Environ())
+	if err != nil {
+		return nil, err
+	}
+
+	if applyErr := apply(set, unset); applyErr != nil {
+		return nil, applyErr
+	}
+
+	base, err := libraryParam(log, root, set, env.Version, configFlag, level)
+	if err != nil {
+		return nil, err
+	}
+
+	return &library{
+		logger:  log,
+		root:    root,
+		runtime: aquaruntime.New(ctx),
+		base:    base,
+		stdout:  env.Stdout,
+	}, nil
 }
 
 // exitRequest is an exit kong asked for, carried out of its parser as a panic:
@@ -199,6 +223,7 @@ func parse(ctx context.Context, cli *grammar, env *Env) (kctx *kong.Context, err
 		kong.UsageOnError(),
 		kong.Vars{"version": env.Version, "limit": strconv.Itoa(config.DefaultVerCnt)},
 		kong.BindTo(ctx, (*context.Context)(nil)),
+		kong.Bind(env),
 		kong.Exit(func(code int) { panic(exitRequest(code)) }),
 	)
 	if err != nil {
