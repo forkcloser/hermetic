@@ -9,12 +9,12 @@ import (
 	"os"
 	"os/exec"
 
-	"github.com/suzuki-shunsuke/go-error-with-exit-code/ecerror"
+	"github.com/mycophonic/primordium/app/shutdown"
 )
 
 // execTool runs the tool as a child, since Windows has no exec: stdio
-// inherited, the environment the one given, and its exit code carried out as
-// ours.
+// inherited, the environment the one given, and its exit status carried out as
+// ours, silently, since the tool has said what it had to.
 func execTool(ctx context.Context, path, name string, args, environ []string) error {
 	// #nosec G204 -- the path is what the library resolved for the name, the arguments the user's own.
 	cmd := exec.CommandContext(ctx, path, args...)
@@ -26,7 +26,7 @@ func execTool(ctx context.Context, path, name string, args, environ []string) er
 
 	err := cmd.Run()
 	if exit, ok := errors.AsType[*exec.ExitError](err); ok {
-		return ecerror.Wrap(err, exit.ExitCode())
+		return fmt.Errorf("%s: %w", name, shutdown.ExitError(exit.ExitCode()))
 	}
 
 	if err != nil {
