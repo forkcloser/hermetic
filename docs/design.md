@@ -44,23 +44,34 @@ Three facts, verified in the sources at the pinned versions, bound the fix:
 
 ## The binary
 
-One binary, `hermetic`, built from aqua as a Go library: `cli.Run` behind our
-own `main`. It is aqua, pinned by `go.mod` and moved by Renovate like every Go
-dependency, with three things of ours around it.
+One binary, `hermetic`, built from aqua as a Go library: the library's
+controllers behind a command line of our own. It is aqua, pinned by `go.mod` and
+moved by Renovate like every Go dependency, with three things of ours around it.
+The command line is kong, the logger slog through primordium's, and the exit
+status primordium's shutdown, as every CLI of ours: aqua's own command layer,
+urfave and its helpers, is not linked, since each of its commands is a few lines
+of flag reading over a controller that takes a plain logger and a parameter
+struct, and those lines are ours. The parameter struct is derived from the
+environment the binary sets for the library (below) and from nothing else: the
+library's settings file is never read, since every value it could supply is
+pinned there.
 
-**It exposes what the toolset uses, and nothing else.** The command tree is
-assembled here from the library's own commands, each as aqua builds it: `install`
+**It exposes what the toolset uses, and nothing else.** The grammar names the
+library's commands the toolset calls, each with the flags it keeps: `install`
 (`-l`, `-a`, the tags), `update`, `update-checksum` (`--prune`, `-a`), `generate`,
-`which`, `policy allow` and `policy deny`, `root-dir`, `version` and `help`, under
-two global flags, `-c` and `--log-level`. The rest of aqua is not reachable:
-`exec` (a tool run through the library would get the library's environment, not
-the shell's; the links in the bin are how a tool runs), `remove`, `info`, `list`,
-`vacuum`, `token`, `cp`, `init`, `init-policy`, `policy init`,
-`generate-registry`, `update-aqua`, shell completion, the `--disable-*` verifier
-switches, `--trace`, `--cpu-profile`, and the deprecated `--test` and `--deep`. A
-command or a flag outside the surface fails as unknown. An error urfave would
-print and exit on itself returns to the entry point instead, logged like every
-other failure, with its exit code.
+`which` (`--show-version` for the package's version: `-v` is the binary's own version
+on every command, so a `which -v` ported from aqua prints hermetic's version and
+exits 0), `policy allow` and `policy deny`, `root-dir` and `version`, under two
+global flags, `-c` and `--log-level`, and `--help`. The rest of aqua is not
+reachable: `exec` (a tool run through the library would get the library's
+environment, not the shell's; the links in the bin are how a tool runs),
+`remove`, `info`, `list`, `vacuum`, `token`, `cp`, `init`, `init-policy`,
+`policy init`, `generate-registry`, `update-aqua`, shell completion, the
+`--disable-*` verifier switches, `--trace`, `--cpu-profile`, and the deprecated
+`--test` and `--deep`. A command or a flag outside the grammar fails as unknown,
+with the usage, as exit status 1; a library failure is logged and is exit status
+1; a tool's own exit status on Windows, where the tool is a child, is carried
+out as it is.
 
 **It dispatches on `argv[0]`.** Invoked under its own name it is aqua, with the
 surface above. Invoked under any other name, through a link, it runs that tool, in

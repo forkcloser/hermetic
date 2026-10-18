@@ -10,17 +10,13 @@ golangci:
         rules:
           main:
             allow:
-              # aqua, the library hermetic is built from, and the two
-              # helpers its own main uses to run it.
+              # aqua, the library hermetic is built from: its controllers, its
+              # parameter struct and the helpers that derive one.
               - github.com/aquaproj/aqua/v2/
-              - github.com/suzuki-shunsuke/slog-util/
-              - github.com/suzuki-shunsuke/urfave-cli-v3-util/
-              # The command tree is assembled here from the library's own commands.
-              - github.com/urfave/cli/v3
-              # The exit-code error the library's own exec uses, so a tool's exit
-              # code on Windows comes out as the library's would.
-              - github.com/suzuki-shunsuke/go-error-with-exit-code/
-              # The fleet's library: the platform's directories and permissions.
+              # The fleet's command line.
+              - github.com/alecthomas/kong
+              # The fleet's library: the platform's directories and permissions,
+              # the logger and the exit status.
               - github.com/mycophonic/primordium/
       wrapcheck:
         ignore-package-globs:

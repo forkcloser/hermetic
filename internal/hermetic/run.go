@@ -2,101 +2,266 @@ package hermetic
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
-	"path/filepath"
 	"runtime"
+	"runtime/debug"
+	"strconv"
 	"strings"
 
+	"github.com/alecthomas/kong"
+	"github.com/aquaproj/aqua/v2/pkg/config"
+	"github.com/aquaproj/aqua/v2/pkg/controller"
+	aquawhich "github.com/aquaproj/aqua/v2/pkg/controller/which"
 	aquaruntime "github.com/aquaproj/aqua/v2/pkg/runtime"
-	"github.com/suzuki-shunsuke/slog-util/slogutil"
-	"github.com/suzuki-shunsuke/urfave-cli-v3-util/urfave"
+	applogger "github.com/mycophonic/primordium/app/logger"
+	"github.com/mycophonic/primordium/app/shutdown"
 )
 
-// Main runs the binary the way aqua's own main runs aqua, with ours around the
-// library: the root, the environment, the project walk and its gate before,
-// the mirror after; and the dispatch, which resolves a tool through the
-// library and then runs it itself.
-func Main(version string) {
-	useTransporter()
-	urfave.Main(Name, version, Run, "env", aquaruntime.New(context.Background()).Env())
+// Env is one invocation's view of its process: the version it reports, its
+// streams, its environment and its arguments, argv[0] first. A test runs the
+// binary through one without owning the process.
+type Env struct {
+	Version string
+	Stdout  io.Writer
+	Stderr  io.Writer
+	Getenv  func(string) string
+	Args    []string
 }
 
-// Run is one invocation of the binary, as Main runs it: env is the process's
-// own (its arguments, its streams, its environment).
-func Run(ctx context.Context, logger *slogutil.Logger, env *urfave.Env) error {
+const description = "The toolset's own aqua: the library's commands under one root of its own, and the tools it installs, by name"
+
+var (
+	errNoPath     = errors.New("the library resolved no path for the tool")
+	errNotManaged = errors.New("the command is not managed by the library, so it has no version")
+	errNotLevel   = errors.New(LogLevelEnv + " is not a log level (debug, info, warn, error)")
+)
+
+// Main runs the binary as a process: Run under a context primordium's shutdown
+// cancels on a signal, then the exit status Run asked for, 0 on nil, 1 with the
+// error logged on anything else. It never returns.
+func Main(version string) {
+	useTransporter()
+
+	ctx := shutdown.SetDefaults(context.Background())
+
+	shutdown.Run(ctx, func(ctx context.Context) error {
+		return Run(ctx, &Env{
+			Version: versionOf(version),
+			Stdout:  os.Stdout,
+			Stderr:  os.Stderr,
+			Getenv:  os.Getenv,
+			Args:    os.Args,
+		})
+	})
+}
+
+// versionOf is the version the release build stamped, else the module version
+// a `go install` recorded, else "unknown".
+func versionOf(stamped string) string {
+	if stamped != "" {
+		return stamped
+	}
+
+	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" {
+		return info.Main.Version
+	}
+
+	return "unknown"
+}
+
+// Run is one invocation of the binary: the root, the environment, the project
+// walk and its gate before the library runs, the mirror after. Under its own
+// name the binary parses its grammar and runs the command named; under any
+// other name, through a link, it resolves that tool through the library and
+// runs it itself.
+func Run(ctx context.Context, env *Env) error {
 	root, err := RootFrom(env.Getenv)
 	if err != nil {
 		return err
 	}
 
 	tool, toolArgs := Dispatched(env.Args, runtime.GOOS)
-	libraryArgs := env.Args
 
-	if tool != "" {
-		libraryArgs = []string{env.Args[0], "which", tool}
+	var (
+		cli  grammar
+		kctx *kong.Context
+	)
+
+	level := env.Getenv(LogLevelEnv)
+
+	if tool == "" {
+		kctx, err = parse(ctx, &cli, env)
+		if err != nil || kctx == nil {
+			return err
+		}
+
+		level = cli.LogLevel
 	}
 
-	set, unset, err := environment(logger.Logger, root, libraryArgs, os.Environ())
+	if level == "" {
+		level = defaultLogLevel
+	}
+
+	slogLevel, err := levelOf(level)
 	if err != nil {
 		return err
 	}
-	// The library's view: the process environment (which the verifiers it runs
-	// inherit) and the Env it was handed both see ours and nothing scrubbed.
-	// The shell's own environment is kept for the tool a dispatch runs.
+	// The process-wide handler, the library's logger included: the level is
+	// the flag's or HERMETIC_LOG_LEVEL's, never the LOG_LEVEL the handler would
+	// read on its own.
+	applogger.SetDefaultsForLogger(ctx, slogLevel)
+
+	log := slog.Default()
+
+	keepsGate := kctx != nil && strings.HasPrefix(kctx.Command(), "policy")
+
+	set, unset, err := environment(log, root, cli.Config != "", keepsGate, os.Environ())
+	if err != nil {
+		return err
+	}
+	// The library's view: the process environment, which the verifiers it runs
+	// inherit, sees ours and nothing scrubbed. The shell's own is kept for the
+	// tool a dispatch runs.
 	shell := os.Environ()
 
 	if applyErr := apply(set, unset); applyErr != nil {
 		return applyErr
 	}
 
-	getenv := env.Getenv
-	env.Getenv = func(key string) string {
-		if v, ok := set[key]; ok {
-			return v
-		}
-
-		if scrubbed(key) {
-			return ""
-		}
-
-		return getenv(key)
-	}
-
-	if tool == "" {
-		runErr := runLibrary(ctx, logger, env)
-		if installs(env.Args) {
-			syncBin(ctx, logger.Logger, root)
-		}
-
-		return runErr
-	}
-
-	path, err := resolve(ctx, logger, env, root, tool)
+	base, err := libraryParam(log, root, set, env.Version, cli.Config, level)
 	if err != nil {
 		return err
 	}
 
-	syncBin(ctx, logger.Logger, root)
+	lib := &library{
+		logger:  log,
+		root:    root,
+		runtime: aquaruntime.New(ctx),
+		base:    base,
+		stdout:  env.Stdout,
+		version: env.Version,
+	}
+
+	if tool == "" {
+		if runErr := kctx.Run(lib); runErr != nil {
+			return fmt.Errorf("%s: %w", kctx.Command(), runErr)
+		}
+
+		return nil
+	}
+
+	path, err := resolve(ctx, lib, tool)
+	if err != nil {
+		return err
+	}
+
+	syncBin(ctx, log, root)
 
 	return execTool(ctx, path, tool, toolArgs, ToolEnvironment(shell))
 }
 
-// resolve finds the tool through the library under the library's environment:
-// `which` for the path (it installs the registries and names where the package
-// lives, installed or not), then `install <tool>` when the package is not there
-// yet, which is the first-use install a links-only root relies on. A path that
-// is this very binary is refused: `which` falls back to the PATH for a name no
-// config has, where a link of ours would make the dispatch run itself forever.
-func resolve(ctx context.Context, logger *slogutil.Logger, env *urfave.Env, root Root, tool string) (string, error) {
-	path, err := which(ctx, logger, env, tool)
+// exitRequest is an exit kong asked for, carried out of its parser as a panic:
+// --help and --version print and ask for 0, a usage error prints and asks for
+// its code. parse answers each on the binary's own exit path, so a test
+// survives both and the shutdown handlers run.
+type exitRequest int
+
+// parse reads the binary's arguments against its grammar. A nil context with a
+// nil error is an invocation kong answered itself (--help, --version); a usage
+// error has been printed with the usage and comes back as the exit status 1,
+// kong's own 80 folded into the one failure status the toolset reads.
+func parse(ctx context.Context, cli *grammar, env *Env) (kctx *kong.Context, err error) {
+	defer func() {
+		if value := recover(); value != nil {
+			code, ok := value.(exitRequest)
+			if !ok {
+				panic(value)
+			}
+
+			kctx = nil
+			err = nil
+
+			if code != 0 {
+				err = shutdown.ExitError(1)
+			}
+		}
+	}()
+
+	parser, err := kong.New(cli,
+		kong.Name(Name),
+		kong.Description(description),
+		kong.Writers(env.Stdout, env.Stderr),
+		kong.UsageOnError(),
+		kong.Vars{"version": env.Version, "limit": strconv.Itoa(config.DefaultVerCnt)},
+		kong.BindTo(ctx, (*context.Context)(nil)),
+		kong.Exit(func(code int) { panic(exitRequest(code)) }),
+	)
 	if err != nil {
-		return "", err
+		return nil, fmt.Errorf("build the command line: %w", err)
 	}
 
-	binary, err := os.Stat(root.Binary(runtime.GOOS))
+	kctx, err = parser.Parse(env.Args[1:])
+	parser.FatalIfErrorf(err)
+
+	return kctx, nil
+}
+
+// levelOf is the slog level a name selects; kong has validated the flag's, the
+// variable's is checked here.
+func levelOf(name string) (slog.Level, error) {
+	switch name {
+	case "debug":
+		return slog.LevelDebug, nil
+	case "info":
+		return slog.LevelInfo, nil
+	case "warn":
+		return slog.LevelWarn, nil
+	case "error":
+		return slog.LevelError, nil
+	default:
+		return 0, fmt.Errorf("%w: %q", errNotLevel, name)
+	}
+}
+
+// which asks the library where a command lives: the registries installed, the
+// package's path named whether it is installed yet or not, and, for a name no
+// config has, the PATH's answer.
+func which(ctx context.Context, lib *library, param *config.Param, tool string) (*aquawhich.FindResult, error) {
+	ctrl, err := controller.InitializeWhichCommandController(ctx, lib.logger, param, http.DefaultClient, lib.runtime)
+	if err != nil {
+		return nil, fmt.Errorf("initialize the which controller: %w", err)
+	}
+
+	found, err := ctrl.Which(ctx, lib.logger.With("exe_name", tool), param, tool)
+	if err != nil {
+		return nil, err
+	}
+
+	return found, nil
+}
+
+// resolve finds the tool a dispatch runs: which for the path, then install for
+// the package when it is not there yet, the first-use install a links-only root
+// relies on. A path that is this very binary is refused: for a name no config
+// has, which falls back to the PATH, where a link of ours would make the
+// dispatch run itself forever.
+func resolve(ctx context.Context, lib *library, tool string) (string, error) {
+	found, err := which(ctx, lib, lib.param(), tool)
+	if err != nil {
+		return "", fmt.Errorf("%s: %w", tool, err)
+	}
+
+	path := found.ExePath
+	if path == "" {
+		return "", fmt.Errorf("%w: %s", errNoPath, tool)
+	}
+
+	binary, err := os.Stat(lib.root.Binary(runtime.GOOS))
 	if err != nil {
 		return "", fmt.Errorf("the binary: %w", err)
 	}
@@ -109,57 +274,24 @@ func resolve(ctx context.Context, logger *slogutil.Logger, env *urfave.Env, root
 	if err == nil {
 		return path, nil
 	}
+	// All: the global config's packages too, since without it the library
+	// reads the working directory's config alone and the toolset's pins are
+	// global.
+	param := lib.param()
+	param.All = true
+	param.Args = []string{tool}
 
-	// -a: the global config's packages too, since without it the library reads
-	// the working directory's config alone and the toolset's pins are global.
-	install := *env
-	install.Args = []string{env.Args[0], "install", "-a", tool}
+	ctrl, err := controller.InitializeInstallCommandController(ctx, lib.logger, param, http.DefaultClient, lib.runtime)
+	if err != nil {
+		return "", fmt.Errorf("initialize the install controller: %w", err)
+	}
 
-	if err := runLibrary(ctx, logger, &install); err != nil {
-		return "", err
+	if err := ctrl.Install(ctx, lib.logger, param); err != nil {
+		return "", fmt.Errorf("install %s: %w", tool, err)
 	}
 
 	if _, err := os.Stat(path); err != nil {
 		return "", fmt.Errorf("%w after installing: %s", errNoPath, tool)
-	}
-
-	return path, nil
-}
-
-// which asks the library for the tool's path. The library prints it on the
-// process's stdout, so that is swapped for a pipe for the call.
-func which(ctx context.Context, logger *slogutil.Logger, env *urfave.Env, tool string) (string, error) {
-	reader, writer, err := os.Pipe()
-	if err != nil {
-		return "", fmt.Errorf("pipe for the tool's path: %w", err)
-	}
-
-	captured := make(chan string, 1)
-
-	go func() {
-		out, _ := io.ReadAll(reader)
-		captured <- strings.TrimSpace(string(out))
-	}()
-
-	which := *env
-	which.Stdout = writer
-	which.Args = []string{env.Args[0], "which", tool}
-
-	stdout := os.Stdout
-	os.Stdout = writer //nolint:reassign // the library prints the path on os.Stdout itself, not on the Env's; the swap is how it is captured.
-	runErr := runLibrary(ctx, logger, &which)
-	os.Stdout = stdout //nolint:reassign // restored.
-
-	_ = writer.Close()
-	path := <-captured
-	_ = reader.Close()
-
-	if runErr != nil {
-		return "", runErr
-	}
-
-	if path == "" {
-		return "", fmt.Errorf("%w: %s", errNoPath, tool)
 	}
 
 	return path, nil
@@ -191,15 +323,22 @@ func apply(set map[string]string, unset []string) error {
 }
 
 // environment is what the library's run sets and unsets, and, unless the run
-// names its config itself (-c, or HERMETIC_CONFIG), AQUA_CONFIG from the
-// project walk, with the project's policy when it passes the gate.
-func environment(logger *slog.Logger, root Root, args, environ []string) (map[string]string, []string, error) {
+// names its config itself (configured: -c, or HERMETIC_CONFIG), AQUA_CONFIG
+// from the project walk, with the project's policy when it passes the gate.
+// The policy subcommands are the gate's own keepers (keepsGate): `policy
+// allow` must not warn about the record it is about to write.
+func environment(
+	logger *slog.Logger,
+	root Root,
+	configured, keepsGate bool,
+	environ []string,
+) (map[string]string, []string, error) {
 	set, unset, err := LibraryEnvironment(root, environ, "")
 	if err != nil {
 		return nil, nil, err
 	}
 
-	if hasConfigFlag(args) || set[aquaConfigEnv] != "" {
+	if configured || set[aquaConfigEnv] != "" {
 		return set, unset, nil
 	}
 
@@ -216,9 +355,8 @@ func environment(logger *slog.Logger, root Root, args, environ []string) (map[st
 	if projectDir == "" {
 		return set, unset, nil
 	}
-	// The policy subcommands are the gate's own keeper: `policy allow` must not
-	// warn about the record it is about to write.
-	if subcommand(args) != "policy" {
+
+	if !keepsGate {
 		policyPath, err := ProjectPolicyPath(logger, root.AquaRoot(), projectDir)
 		if err != nil {
 			return nil, nil, err
@@ -230,7 +368,7 @@ func environment(logger *slog.Logger, root Root, args, environ []string) (map[st
 		}
 	}
 
-	set[aquaConfigEnv] = filepath.Join(projectDir, ProjectConfig)
+	set[aquaConfigEnv] = projectDir + string(os.PathSeparator) + ProjectConfig
 
 	return set, unset, nil
 }
