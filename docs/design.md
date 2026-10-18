@@ -194,7 +194,10 @@ validator: `.hermetic/policy.yaml` joins `AQUA_POLICY_CONFIG` only when its reco
 under `<root>/store/policies/` matches, and is otherwise dropped with the same
 warning. `hermetic policy allow .hermetic/policy.yaml` stays the one-time
 gate per machine, in the setup action and the book under the new path. The one
-policy trusted on sight is the toolset's own, in the root, as today.
+policy trusted on sight is the toolset's own, in the root, as today, and it is
+listed only while the root holds one: a root with no toolset in it, a runner's
+or a fresh session's, has no policy of its own, and the library refuses a
+listed file that is not there, so the list is of what exists.
 
 Two consequences:
 
