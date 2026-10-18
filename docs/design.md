@@ -221,7 +221,10 @@ where it unset the variable, and `HERMETIC_GITHUB_TOKEN` where it set
 
 The canonical setup action installs `hermetic` on the runner instead of
 upstream aqua: the release asset from forkcloser/hermetic at a pinned version, its
-checksum pinned in the action and moved by Renovate as `AQUA_VERSION` is today, and
+checksum pinned in the action beside the version, the pair bumped by hand in limen
+as the action's aqua-installer pair is today (Renovate watches `AQUA_VERSION` in
+the action, in limen alone, and no sha256: the installer pair and hermetic's move
+by hand), and
 `gh attestation verify` against hermetic's release workflow where `gh` exists
 (every GitHub runner). Then `hermetic i` as before. The action's name follows
 the tool; the content-pinned rule carries the rename to the fleet with a limen
@@ -232,14 +235,21 @@ release.
 The binary is this repository, forkcloser/hermetic: `go.mod`, `cmd/hermetic`,
 goreleaser through limen's canonical release lane, binaries for darwin/arm64,
 linux/amd64, linux/arm64, windows/amd64 and windows/arm64, `checksums.txt`,
-attestations on every asset. limen-install keeps the scripts; the two
-repositories release on their own tags, and the scripts pin the binary's.
+attestations on every asset. `release.yaml` is seeded once and never moved by a
+limen bump, so the attestation step comes here by hand from limen's seed; v0.1.0,
+cut before it, carries `checksums.txt` and its cosign bundle, and verification by
+attestation starts with the first tag cut after the step. limen-install keeps the
+scripts; the two repositories release on their own tags, and the scripts pin the
+binary's.
 
 `limen-install` fetches the binary from hermetic's release at the pinned
 version, under a checksum pinned in the script, where aqua-installer and its
 checksum are pinned today, and places it at `<root>/bin/hermetic`; the toolset's
 config, registry and policy go beside it, and `hermetic i -a` installs the
-toolset. Renovate moves the pin in the script as it moves `AQUA_VERSION`. There is no
+toolset. Renovate moves the version in the script as it moves
+`AQUA_INSTALLER_VERSION`, and the script's installer-checksum workflow recomputes
+the sha256 beside it on Renovate's branch, as it does for aqua-installer today:
+Renovate moves a version, never a digest. There is no
 `aqua update-aqua` any more: the binary is ours, and only our release replaces it.
 The nightly job runs the installer as it does today and takes the new binary with
 it. `limen-install.ps1` does the same with the Windows asset, with one difference. The
@@ -251,9 +261,10 @@ recreates every hard link, which is what aqua does for its own proxy; the mirror
 identity comparison catches any it missed.
 
 Renovate: the aqua library through `go.mod` (our own cooldown rule applies to
-nothing here; upstream's three days do); the `hermetic` pin in the installer
-script and in the setup action through the regex managers that watch the aqua pins
-today.
+nothing here; upstream's three days do); the `hermetic` version in the installer
+script through the regex manager that watches aqua-installer's today, its sha256
+recomputed by the installer-checksum workflow; the pair in the setup action by
+hand in limen, as its aqua-installer pair is.
 
 ## Migration
 
