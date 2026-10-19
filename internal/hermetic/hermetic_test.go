@@ -1,6 +1,8 @@
 package hermetic_test
 
 import (
+	"bytes"
+	"encoding/json"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -335,7 +337,12 @@ func TestFindProject(t *testing.T) {
 func TestProjectPolicyPath(t *testing.T) {
 	t.Parallel()
 
-	logger := slog.New(slog.DiscardHandler)
+	// JSON, decoded, rather than text grepped: the text handler quotes a value
+	// with spaces and escapes its backslashes, so a Windows path in the command
+	// never matches the plain string.
+	var logged bytes.Buffer
+
+	logger := slog.New(slog.NewJSONHandler(&logged, nil))
 	top := t.TempDir()
 	aquaRoot := filepath.Join(top, "store")
 	project := filepath.Join(top, "repo", hermetic.ProjectDir)
@@ -359,6 +366,25 @@ func TestProjectPolicyPath(t *testing.T) {
 	if got, err := hermetic.ProjectPolicyPath(logger, aquaRoot, project); err != nil || got != "" {
 		t.Fatalf("without a record: %q, %v; want dropped", got, err)
 	}
+	// The warning names this binary's commands, never aqua's, which a hermetic
+	// machine does not have.
+	warning := lastRecord(t, &logged)
+	for key, want := range map[string]string{
+		"msg":    "the project policy is ignored until allowed",
+		"policy": policy,
+		"allow":  "hermetic policy allow " + policy,
+		"deny":   "hermetic policy deny " + policy,
+	} {
+		if warning[key] != want {
+			t.Fatalf("warning %s = %q, want %q", key, warning[key], want)
+		}
+	}
+
+	if strings.Contains(logged.String(), "aqua policy") {
+		t.Fatalf("the warning names aqua's command:\n%s", logged.String())
+	}
+
+	logged.Reset()
 	// The record `policy allow` writes: the policy's copy under policies/ at
 	// its absolute path (the drive's colon an underscore on Windows).
 	record := filepath.Join(aquaRoot, "policies", strings.ReplaceAll(policy, ":", "_"))
@@ -386,6 +412,30 @@ func TestProjectPolicyPath(t *testing.T) {
 
 	if stale, staleErr := hermetic.ProjectPolicyPath(logger, aquaRoot, project); staleErr != nil || stale != "" {
 		t.Fatalf("with a stale record: %q, %v; want dropped", stale, staleErr)
+	}
+
+	if msg := lastRecord(t, &logged)["msg"]; msg != "the project policy changed since it was allowed and is ignored until allowed again" {
+		t.Fatalf("a stale record is not said to be stale: msg = %q", msg)
+	}
+
+	logged.Reset()
+	// The record `policy deny` writes: the human chose to ignore the policy,
+	// and the warning goes quiet.
+	denied := filepath.Join(aquaRoot, "policy-warnings", strings.ReplaceAll(policy, ":", "_"))
+	if err := os.MkdirAll(filepath.Dir(denied), 0o750); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(denied, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if quiet, quietErr := hermetic.ProjectPolicyPath(logger, aquaRoot, project); quietErr != nil || quiet != "" {
+		t.Fatalf("with a deny record: %q, %v; want dropped", quiet, quietErr)
+	}
+
+	if logged.Len() != 0 {
+		t.Fatalf("a denied policy still warns:\n%s", logged.String())
 	}
 	// A project without a policy file has nothing to gate.
 	if err := os.Remove(policy); err != nil {
@@ -584,4 +634,19 @@ func sameFile(a, b string) (bool, error) {
 	}
 
 	return os.SameFile(ia, ib), nil
+}
+
+// lastRecord is the last JSON record a logger wrote into logged, decoded, so
+// an attribute compares as the value logged whatever the handler's quoting.
+func lastRecord(t *testing.T, logged *bytes.Buffer) map[string]any {
+	t.Helper()
+
+	lines := strings.Split(strings.TrimSpace(logged.String()), "\n")
+
+	var record map[string]any
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &record); err != nil {
+		t.Fatalf("decode the log record %q: %v", lines[len(lines)-1], err)
+	}
+
+	return record
 }
