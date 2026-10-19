@@ -235,10 +235,12 @@ where it unset the variable, and `HERMETIC_GITHUB_TOKEN` where it set
 
 The canonical setup action installs `hermetic` on the runner instead of
 upstream aqua: the release asset from forkcloser/hermetic at a pinned version, its
-checksum pinned in the action beside the version, the pair bumped by hand in limen
-as the action's aqua-installer pair is today (Renovate watches `AQUA_VERSION` in
-the action, in limen alone, and no sha256: the installer pair and hermetic's move
-by hand), and
+checksum pinned in the action beside the version, the pair moved as the installer
+script's is: Renovate bumps `HERMETIC_VERSION` in the action, in limen alone, and
+limen's checksum workflow recomputes `HERMETIC_CHECKSUMS_SHA256` beside it on
+Renovate's branch from the release's `checksums.txt`, before the action installs
+hermetic (the action's aqua-installer pair was bumped by hand, since nothing
+recomputed its sha256; hermetic's never is), and
 `gh attestation verify` against hermetic's release workflow where `gh` exists
 (every GitHub runner). Then `hermetic i` as before. The action's name follows
 the tool; the content-pinned rule carries the rename to the fleet with a limen
@@ -277,8 +279,9 @@ identity comparison catches any it missed.
 Renovate: the aqua library through `go.mod` (our own cooldown rule applies to
 nothing here; upstream's three days do); the `hermetic` version in the installer
 script through the regex manager that watches aqua-installer's today, its sha256
-recomputed by the installer-checksum workflow; the pair in the setup action by
-hand in limen, as its aqua-installer pair is.
+recomputed by the installer-checksum workflow; the pair in the setup action the
+same way, in limen alone, its sha256 recomputed by limen's checksum workflow.
+Nothing in either pair is bumped by hand.
 
 ## Migration
 
