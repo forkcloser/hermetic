@@ -5,7 +5,7 @@ go 1.27.1
 require (
 	github.com/alecthomas/kong v1.16.1
 	github.com/aquaproj/aqua/v2 v2.64.0
-	github.com/mycophonic/primordium v0.15.0
+	github.com/mycophonic/primordium v0.15.1
 )
 
 require (
