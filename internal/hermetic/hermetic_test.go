@@ -118,7 +118,9 @@ func TestLibraryEnvironment(t *testing.T) {
 	want := map[string]string{
 		"AQUA_ROOT_DIR":      filepath.FromSlash("/r/store"),
 		"AQUA_GLOBAL_CONFIG": filepath.FromSlash("/r/hermetic.yaml"),
-		"AQUA_POLICY_CONFIG": filepath.FromSlash("/r/policy.yaml"),
+		// A root with no policy in it names none: the library refuses a listed
+		// file that is not there.
+		"AQUA_POLICY_CONFIG": "",
 		"TUF_ROOT":           filepath.FromSlash("/r/sigstore"),
 		"AQUA_GITHUB_TOKEN":  "ours",
 		"GITHUB_TOKEN":       "ours",
@@ -181,16 +183,40 @@ func TestLibraryEnvironment(t *testing.T) {
 		t.Errorf("default log level: AQUA_LOG_LEVEL = %q, want info", none["AQUA_LOG_LEVEL"])
 	}
 
-	// The project's policy, after the gate, joins the root's.
+	// The policies are what exists: the project's, after the gate, alone
+	// while the root holds none; after the root's once the root holds one.
 	policy := filepath.FromSlash("/p/.hermetic/policy.yaml")
+	stocked := hermetic.Root(t.TempDir())
 
-	withPolicy, _, err := hermetic.LibraryEnvironment(root, nil, policy)
+	projectOnly, _, err := hermetic.LibraryEnvironment(stocked, nil, policy)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if withPolicy["AQUA_POLICY_CONFIG"] != want["AQUA_POLICY_CONFIG"]+sep+policy {
-		t.Errorf("policy list = %q", withPolicy["AQUA_POLICY_CONFIG"])
+	if projectOnly["AQUA_POLICY_CONFIG"] != policy {
+		t.Errorf("policy list without a root policy = %q, want %q", projectOnly["AQUA_POLICY_CONFIG"], policy)
+	}
+
+	if writeErr := os.WriteFile(stocked.Policy(), []byte("registries: []\npackages: []\n"), 0o600); writeErr != nil {
+		t.Fatal(writeErr)
+	}
+
+	withPolicy, _, err := hermetic.LibraryEnvironment(stocked, nil, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if withPolicy["AQUA_POLICY_CONFIG"] != stocked.Policy()+sep+policy {
+		t.Errorf("policy list = %q, want %q", withPolicy["AQUA_POLICY_CONFIG"], stocked.Policy()+sep+policy)
+	}
+
+	rootOnly, _, err := hermetic.LibraryEnvironment(stocked, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if rootOnly["AQUA_POLICY_CONFIG"] != stocked.Policy() {
+		t.Errorf("policy list without a project policy = %q, want %q", rootOnly["AQUA_POLICY_CONFIG"], stocked.Policy())
 	}
 
 	// A HERMETIC_* the binary does not know is refused, named; so is a value

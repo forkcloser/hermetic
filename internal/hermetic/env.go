@@ -114,8 +114,8 @@ func noGlobalConfig() string { return string(os.PathListSeparator) }
 // LibraryEnvironment is the environment the library runs in, for its own
 // subcommands and for the resolution half of a dispatch: the shell's, minus
 // what is scrubbed (see scrubbedPrefixes), plus ours. aqua's three paths
-// derive from the root; the project's policy, when one passed the gate, is
-// listed after the root's; the token, the log level and a config path come
+// derive from the root; the policies are the root's, when the root holds one,
+// then the project's, when one passed the gate; the token, the log level and a config path come
 // only from their HERMETIC_ counterparts; the verifiers' TUF cache lives in
 // the root. set holds what is set, unset what is removed; a HERMETIC_*
 // variable the binary does not know is an error.
@@ -159,13 +159,9 @@ func LibraryEnvironment(
 
 	set[aquaRootEnv] = root.AquaRoot()
 	set[aquaGlobalConfigEnv] = global
-	set[aquaPolicyConfigEnv] = root.Policy()
+	set[aquaPolicyConfigEnv] = policyList(root, projectPolicy)
 	set[tufRootEnv] = filepath.Join(string(root), "sigstore")
 	set[aquaLogLevelEnv] = defaultLogLevel
-
-	if projectPolicy != "" {
-		set[aquaPolicyConfigEnv] = root.Policy() + string(os.PathListSeparator) + projectPolicy
-	}
 
 	if v := ours[ConfigEnv]; v != "" {
 		set[aquaConfigEnv] = v
@@ -215,4 +211,24 @@ func scrubbed(key string) bool {
 	}
 
 	return false
+}
+
+// policyList is what AQUA_POLICY_CONFIG names: the root's policy, the
+// toolset's own and trusted on sight, when the root holds one, then the
+// project's when one passed the gate. A root with no toolset in it, a
+// runner's or a fresh session's, has no policy of its own, and the library
+// refuses a listed file that is not there; so the list is of what exists,
+// never of what a root should have.
+func policyList(root Root, projectPolicy string) string {
+	policies := make([]string, 0, 2)
+
+	if _, statErr := os.Stat(root.Policy()); statErr == nil {
+		policies = append(policies, root.Policy())
+	}
+
+	if projectPolicy != "" {
+		policies = append(policies, projectPolicy)
+	}
+
+	return strings.Join(policies, string(os.PathListSeparator))
 }
