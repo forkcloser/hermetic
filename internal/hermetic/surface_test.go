@@ -1,6 +1,7 @@
 package hermetic_test
 
 import (
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -197,4 +198,118 @@ func TestNoRootForVersionAndUsage(t *testing.T) {
 	if out, err := invoke(t, "root-dir"); err == nil {
 		t.Fatalf("root-dir answered without a root: %s", out)
 	}
+}
+
+// TestNamedConfigCarriesItsProject holds a run that names its config, through
+// HERMETIC_CONFIG or -c, to the named config's project: the policy beside the
+// manifest goes through the gate as a walked one does, so from a working
+// directory outside the project the gate's warning names that policy; a
+// manifest with no policy beside it, a scratch copy, carries none; and without
+// a named config a working directory outside any project sees no gate at all.
+func TestNamedConfigCarriesItsProject(t *testing.T) {
+	t.Setenv(hermetic.RootEnv, t.TempDir())
+
+	project := filepath.Join(t.TempDir(), "repo", hermetic.ProjectDir)
+	write(t, filepath.Join(project, hermetic.ProjectConfig), "packages: []\n")
+	write(t, filepath.Join(project, hermetic.ProjectPolicy), "registries:\n  - type: standard\n")
+
+	scratch := filepath.Join(t.TempDir(), "scratch", hermetic.ProjectConfig)
+	write(t, scratch, "packages: []\n")
+
+	t.Chdir(t.TempDir())
+
+	for _, c := range []struct {
+		name   string
+		env    string
+		args   []string
+		policy string
+	}{
+		{"named by the variable", filepath.Join(project, hermetic.ProjectConfig), []string{"root-dir"}, filepath.Join(project, hermetic.ProjectPolicy)},
+		{"named by the flag", "", []string{"-c", filepath.Join(project, hermetic.ProjectConfig), "root-dir"}, filepath.Join(project, hermetic.ProjectPolicy)},
+		{"a scratch copy", scratch, []string{"root-dir"}, ""},
+		{"nothing named, outside any project", "", []string{"root-dir"}, ""},
+	} {
+		t.Setenv(hermetic.ConfigEnv, c.env)
+
+		warned := stderrOf(t, func() {
+			if out, err := invoke(t, c.args...); err != nil {
+				t.Fatalf("%s: %v\n%s", c.name, err, out)
+			}
+		})
+
+		gated, found := gatedPolicy(t, warned)
+
+		switch {
+		case c.policy == "" && found:
+			t.Fatalf("%s: a policy was gated where none is carried: %q\n%s", c.name, gated, warned)
+		case c.policy != "" && !found:
+			t.Fatalf("%s: the named config's policy was not gated:\n%s", c.name, warned)
+		case c.policy != "" && gated != c.policy:
+			t.Fatalf("%s: the gate names %q, want %q", c.name, gated, c.policy)
+		}
+	}
+}
+
+// stderrOf runs function with the process's stderr swapped for a pipe and
+// returns what was written: the process-wide log handler Run installs writes
+// there, not on the Env's stream.
+func stderrOf(t *testing.T, function func()) string {
+	t.Helper()
+
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	captured := make(chan string, 1)
+
+	go func() {
+		out, _ := io.ReadAll(reader)
+		captured <- string(out)
+	}()
+
+	stderr := os.Stderr
+	os.Stderr = writer //nolint:reassign // the handler Run installs writes on os.Stderr; the swap is how a test reads it.
+
+	function()
+
+	os.Stderr = stderr //nolint:reassign // restored.
+
+	_ = writer.Close()
+	out := <-captured
+	_ = reader.Close()
+
+	return out
+}
+
+// gatedPolicy is the policy the gate's warning names among the JSON records
+// on logged, decoded so a Windows path compares as logged, and whether there
+// is one.
+func gatedPolicy(t *testing.T, logged string) (string, bool) {
+	t.Helper()
+
+	for line := range strings.SplitSeq(strings.TrimSpace(logged), "\n") {
+		if line == "" {
+			continue
+		}
+
+		var record map[string]any
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatalf("decode the log record %q: %v", line, err)
+		}
+
+		msg, isText := record["msg"].(string)
+		if !isText || !strings.Contains(msg, "ignored until allowed") {
+			continue
+		}
+
+		policy, isPath := record["policy"].(string)
+		if !isPath {
+			t.Fatalf("the gate's warning carries no policy path: %s", line)
+		}
+
+		return policy, true
+	}
+
+	return "", false
 }

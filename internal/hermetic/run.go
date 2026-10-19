@@ -167,7 +167,7 @@ func newLibrary(
 		return nil, err
 	}
 
-	set, unset, err := environment(log, root, configFlag != "", keepsGate, os.Environ())
+	set, unset, err := environment(log, root, configFlag, keepsGate, os.Environ())
 	if err != nil {
 		return nil, err
 	}
@@ -406,15 +406,21 @@ func apply(set map[string]string, unset []string) error {
 	return nil
 }
 
-// environment is what the library's run sets and unsets, and, unless the run
-// names its config itself (configured: -c, or HERMETIC_CONFIG), AQUA_CONFIG
-// from the project walk, with the project's policy when it passes the gate.
-// The policy subcommands are the gate's own keepers (keepsGate): `policy
-// allow` must not warn about the record it is about to write.
+// environment is what the library's run sets and unsets, and AQUA_CONFIG with
+// the project's policy when it passes the gate. The project is the one the
+// run names (configFlag: -c, or HERMETIC_CONFIG, already in set), whose
+// directory holds its policy as a walked one does, so a named config carries
+// its project and a job that names the checkout's manifest resolves from any
+// working directory as it would from the checkout; a manifest with no policy
+// beside it, a scratch copy, has none to carry. Without a named config the
+// project is the walk's, upward from the working directory. The policy
+// subcommands are the gate's own keepers (keepsGate): `policy allow` must not
+// warn about the record it is about to write.
 func environment(
 	logger *slog.Logger,
 	root Root,
-	configured, keepsGate bool,
+	configFlag string,
+	keepsGate bool,
 	environ []string,
 ) (map[string]string, []string, error) {
 	set, unset, err := LibraryEnvironment(root, environ, "")
@@ -422,16 +428,12 @@ func environment(
 		return nil, nil, err
 	}
 
-	if configured || set[aquaConfigEnv] != "" {
-		return set, unset, nil
+	named := configFlag
+	if named == "" {
+		named = set[aquaConfigEnv]
 	}
 
-	wd, err := os.Getwd()
-	if err != nil {
-		return nil, nil, fmt.Errorf("get the working directory: %w", err)
-	}
-
-	projectDir, err := FindProject(wd)
+	projectDir, err := projectOf(named)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -452,7 +454,31 @@ func environment(
 		}
 	}
 
-	set[aquaConfigEnv] = projectDir + string(os.PathSeparator) + ProjectConfig
+	if named == "" {
+		set[aquaConfigEnv] = projectDir + string(os.PathSeparator) + ProjectConfig
+	}
 
 	return set, unset, nil
+}
+
+// projectOf is the project directory a run works in: the directory of the
+// config it names, made absolute as the library resolves a named config, or
+// the walk's from the working directory when none is named; "" when neither
+// gives one.
+func projectOf(named string) (string, error) {
+	if named != "" {
+		abs, err := filepath.Abs(named)
+		if err != nil {
+			return "", fmt.Errorf("resolve the named config: %w", err)
+		}
+
+		return filepath.Dir(abs), nil
+	}
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("get the working directory: %w", err)
+	}
+
+	return FindProject(cwd)
 }
