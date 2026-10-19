@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"runtime"
 	"runtime/debug"
 	"strconv"
@@ -272,9 +273,13 @@ func which(ctx context.Context, lib *library, param *config.Param, tool string) 
 
 // resolve finds the tool a dispatch runs: which for the path, then install for
 // the package when it is not there yet, the first-use install a links-only root
-// relies on. A path that is this very binary is refused: for a name no config
-// has, which falls back to the PATH, where a link of ours would make the
-// dispatch run itself forever.
+// relies on. For a name no config has, which falls back to the PATH, and the
+// first hit there is this very binary, the link the dispatch came through,
+// since the library skips only its own proxy: that hit is passed over for the
+// next entry on the PATH that is not the binary, which is what a script that
+// runs outside any project, an autotools build in a scratch directory, gets
+// from the system; only when nothing remains is the name refused, rather than
+// dispatching itself forever.
 func resolve(ctx context.Context, lib *library, tool string) (string, error) {
 	found, err := which(ctx, lib, lib.param(), tool)
 	if err != nil {
@@ -293,6 +298,10 @@ func resolve(ctx context.Context, lib *library, tool string) (string, error) {
 
 	info, err := os.Stat(path)
 	if err == nil && os.SameFile(info, binary) {
+		if past := lookPathPast(binary, tool); past != "" {
+			return past, nil
+		}
+
 		return "", fmt.Errorf("%w: %s", errNoPath, tool)
 	}
 
@@ -320,6 +329,56 @@ func resolve(ctx context.Context, lib *library, tool string) (string, error) {
 	}
 
 	return path, nil
+}
+
+// lookPathPast is the first executable named tool on the PATH that is not the
+// binary: every entry whose file is the binary, the root's bin and any other
+// link to it, is passed over.
+func lookPathPast(binary os.FileInfo, tool string) string {
+	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
+		if dir == "" {
+			continue
+		}
+
+		for _, name := range toolNames(tool) {
+			// #nosec G703 -- the PATH is the shell's own, read as any lookup reads it.
+			if candidate := filepath.Join(dir, name); runnable(candidate, binary) {
+				return candidate
+			}
+		}
+	}
+
+	return ""
+}
+
+// toolNames is what a tool's name may be spelled as in a PATH entry: the name
+// itself, and on Windows the name under each of PATHEXT's extensions, as a
+// shell would find it.
+func toolNames(tool string) []string {
+	names := []string{tool}
+
+	if runtime.GOOS != windows {
+		return names
+	}
+
+	for ext := range strings.SplitSeq(os.Getenv("PATHEXT"), ";") {
+		if ext != "" {
+			names = append(names, tool+strings.ToLower(ext), tool+strings.ToUpper(ext))
+		}
+	}
+
+	return names
+}
+
+// runnable reports whether path is an executable file that is not the binary.
+func runnable(path string, binary os.FileInfo) bool {
+	// #nosec G703 -- the path is a PATH entry joined with the tool's name, read as any lookup reads it.
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() || os.SameFile(info, binary) {
+		return false
+	}
+
+	return runtime.GOOS == windows || info.Mode()&0o111 != 0
 }
 
 // syncBin mirrors best effort after a run that may have changed what aqua
