@@ -19,10 +19,10 @@ import (
 // against the record `policy allow` wrote; our walk replaces the finder, so the
 // validation is done here, with the library's validator: the project's policy
 // is returned, to join AQUA_POLICY_CONFIG, only when its record under
-// <aqua root>/policies matches byte for byte, and is dropped with the library's
-// own warning when the record is missing or stale. A cloned repository thus
-// cannot allow a registry of its choosing; `policy allow` stays the one-time
-// gate per machine.
+// <aqua root>/policies matches byte for byte, and is dropped with a warning
+// when the record is missing or stale, unless `policy deny` recorded the
+// human's choice to ignore it. A cloned repository thus cannot allow a registry
+// of its choosing; `policy allow` stays the one-time gate per machine.
 func ProjectPolicyPath(logger *slog.Logger, aquaRoot, projectDir string) (string, error) {
 	if projectDir == "" {
 		return "", nil
@@ -45,27 +45,50 @@ func ProjectPolicyPath(logger *slog.Logger, aquaRoot, projectDir string) (string
 	if err := validator.Validate(policyPath); err != nil {
 		// The library's errors are unexported; its reader tells "updated" from
 		// "not found" the same way, by the record's presence.
-		updated := recordExists(aquaRoot, policyPath)
-		if werr := validator.Warn(logger, policyPath, updated); werr != nil {
-			return "", fmt.Errorf("warn about the project policy: %w", werr)
-		}
+		warnUnallowed(logger, aquaRoot, policyPath, recordExists(aquaRoot, "policies", policyPath))
 
-		return "", nil
+		return "", nil //nolint:nilerr // the validator's error is the gate holding: the policy is dropped, warned about, and the run goes on.
 	}
 
 	return policyPath, nil
 }
 
-// recordExists reports whether `policy allow` recorded the policy: the record is
-// its copy under <aqua root>/policies at the normalized absolute path (on
-// Windows the drive's colon becomes an underscore), as aqua keys it.
-func recordExists(aquaRoot, policyPath string) bool {
+// warnUnallowed says the project's policy is ignored and how to allow or deny
+// it, by this binary's commands. The library's own warning names aqua's, which
+// a hermetic machine does not have. Silent when `policy deny` recorded the
+// human's choice, the way the library's warning is.
+func warnUnallowed(logger *slog.Logger, aquaRoot, policyPath string, updated bool) {
+	if recordExists(aquaRoot, "policy-warnings", policyPath) {
+		return
+	}
+
+	how := []any{
+		"policy", policyPath,
+		"allow", Name + " policy allow " + policyPath,
+		"deny", Name + " policy deny " + policyPath,
+	}
+
+	if updated {
+		logger.Warn("the project policy changed since it was allowed and is ignored until allowed again", how...)
+
+		return
+	}
+
+	logger.Warn("the project policy is ignored until allowed", how...)
+}
+
+// recordExists reports whether the library holds a record for the policy under
+// the directory named in its root: `policies`, which `policy allow` writes, or
+// `policy-warnings`, which `policy deny` writes. A record is keyed by the
+// policy's normalized absolute path (on Windows the drive's colon becomes an
+// underscore), as aqua keys it.
+func recordExists(aquaRoot, dir, policyPath string) bool {
 	name := policyPath
 	if runtime.GOOS == windows {
 		name = strings.ReplaceAll(policyPath, ":", "_")
 	}
 
-	_, err := os.Stat(filepath.Join(aquaRoot, "policies", name))
+	_, err := os.Stat(filepath.Join(aquaRoot, dir, name))
 
 	return err == nil
 }
