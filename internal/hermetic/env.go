@@ -25,7 +25,9 @@ const (
 	githubTokenEnv      = "GITHUB_TOKEN" // #nosec G101 -- a variable's name, not a credential.
 	tufRootEnv          = "TUF_ROOT"
 
-	// ConfigEnv names the project config outright, like -c; the walk stays out.
+	// ConfigEnv names the project config outright, like -c; the walk stays out,
+	// and the named config carries its project: the policy beside it, through
+	// the gate, as a walked one does.
 	ConfigEnv = ourPrefix + "CONFIG"
 	// NoGlobalConfigEnv, true, gives the run no global config: the recipe that
 	// runs on a project's own pins alone sets it.

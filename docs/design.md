@@ -181,7 +181,11 @@ variants, library constants, but `AQUA_CONFIG` names one config file outright. S
 `hermetic` does the walk itself, upward from the working directory for
 `.hermetic/hermetic.yaml`, and sets `AQUA_CONFIG` to what it finds before the
 library runs. `-c` and `HERMETIC_CONFIG` win over the walk, for the recipe
-that runs on a scratch copy of the manifest.
+that runs on a scratch copy of the manifest, and the named config carries its
+project: the policy beside the manifest, through the same gate as a walked one,
+so a job that names the checkout's manifest resolves the checkout's pins from any
+working directory, a build in a scratch directory included, as it would from the
+checkout; a scratch copy with no policy beside it carries none.
 
 The project's policy keeps its gate. Everything `AQUA_POLICY_CONFIG` names is
 trusted on sight by the library; only a policy its own finder locates beside a
