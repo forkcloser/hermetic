@@ -14,7 +14,7 @@ func Dispatched(args []string, goos string) (tool string, toolArgs []string) {
 
 	name := baseName(args[0], goos)
 	if goos == windows {
-		name = strings.TrimSuffix(name, ".exe")
+		name = trimExe(name)
 		if strings.EqualFold(name, Name) {
 			return "", nil
 		}
@@ -25,6 +25,18 @@ func Dispatched(args []string, goos string) (tool string, toolArgs []string) {
 	}
 
 	return name, args[1:]
+}
+
+// trimExe drops a trailing ".exe" in any case: the file system that spells
+// the name is case-insensitive, and argv[0] carries the caller's spelling.
+func trimExe(name string) string {
+	const ext = ".exe"
+
+	if len(name) > len(ext) && strings.EqualFold(name[len(name)-len(ext):], ext) {
+		return name[:len(name)-len(ext)]
+	}
+
+	return name
 }
 
 // baseName is the last element of an invocation path for the platform named,

@@ -267,9 +267,22 @@ func TestDispatched(t *testing.T) {
 		},
 		{name: "a tool, no args", args: []string{"ssh"}, goos: "darwin", tool: "ssh", toolArgs: []string{}},
 		{name: "windows own name", args: []string{`C:\r\bin\Hermetic.exe`, "which", "limen"}, goos: "windows"},
+		{name: "windows own name, as typed", args: []string{`C:\r\bin\HERMETIC.EXE`, "version"}, goos: "windows"},
+		{name: "windows own name, mixed", args: []string{`Hermetic.Exe`}, goos: "windows"},
 		{
 			name: "windows tool", args: []string{`C:\r\bin\limen.exe`, "version"}, goos: "windows",
 			tool: "limen", toolArgs: []string{"version"},
+		},
+		{
+			name: "windows tool, as typed", args: []string{`C:\r\bin\LIMEN.EXE`, "version"}, goos: "windows",
+			tool: "LIMEN", toolArgs: []string{"version"},
+		},
+		{
+			name:     "windows tool named by its extension alone",
+			args:     []string{`.exe`},
+			goos:     "windows",
+			tool:     ".exe",
+			toolArgs: []string{},
 		},
 		{name: "empty", args: nil, goos: "linux"},
 	}
