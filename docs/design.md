@@ -82,7 +82,9 @@ replacing the process on Unix, as a child whose exit code becomes ours on Window
 A name no config provides, by the walk or named, is looked up past hermetic's own
 links, every PATH entry that resolves to the binary, to the next entry on the
 PATH, the system's tool, as the recipes' PATH already orders it, the root's bin then
-the base system; it is refused only when nothing remains. Pins are not optional
+the base system; it is refused only when nothing remains. `which` answers the same
+path, so a script's `$(hermetic which <tool>)` names what a dispatch runs, never
+the link. Pins are not optional
 for that: wherever a config applies, the name resolves through it, and on a
 runner the setup action names the checkout's manifest for the whole job, so the
 fallback is reached only in a human's shell outside any project.

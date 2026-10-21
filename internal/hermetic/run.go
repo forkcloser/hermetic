@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
@@ -271,41 +272,21 @@ func which(ctx context.Context, lib *library, param *config.Param, tool string) 
 	return found, nil
 }
 
-// resolve finds the tool a dispatch runs: which for the path, then install for
-// the package when it is not there yet, the first-use install a links-only root
-// relies on. For a name no config has, which falls back to the PATH, and the
-// first hit there is this very binary, the link the dispatch came through,
-// since the library skips only its own proxy: that hit is passed over for the
-// next entry on the PATH that is not the binary, which is what a script that
-// runs outside any project, an autotools build in a scratch directory, gets
-// from the system; only when nothing remains is the name refused, rather than
-// dispatching itself forever.
+// resolve finds the tool a dispatch runs: which for the path, past the root's
+// own link, then install for the package when it is not there yet, the
+// first-use install a links-only root relies on.
 func resolve(ctx context.Context, lib *library, tool string) (string, error) {
 	found, err := which(ctx, lib, lib.param(), tool)
 	if err != nil {
 		return "", fmt.Errorf("%s: %w", tool, err)
 	}
 
-	path := found.ExePath
-	if path == "" {
-		return "", fmt.Errorf("%w: %s", errNoPath, tool)
-	}
-
-	binary, err := os.Stat(lib.root.Binary(runtime.GOOS))
+	path, err := pastLink(lib, found, tool)
 	if err != nil {
-		return "", fmt.Errorf("the binary: %w", err)
+		return "", err
 	}
 
-	info, err := os.Stat(path)
-	if err == nil && os.SameFile(info, binary) {
-		if past := lookPathPast(binary, tool); past != "" {
-			return past, nil
-		}
-
-		return "", fmt.Errorf("%w: %s", errNoPath, tool)
-	}
-
-	if err == nil {
+	if _, statErr := os.Stat(path); statErr == nil {
 		return path, nil
 	}
 	// All: the global config's packages too, since without it the library
@@ -326,6 +307,40 @@ func resolve(ctx context.Context, lib *library, tool string) (string, error) {
 
 	if _, err := os.Stat(path); err != nil {
 		return "", fmt.Errorf("%w after installing: %s", errNoPath, tool)
+	}
+
+	return path, nil
+}
+
+// pastLink is where a which answer leads. For a name no config has, the
+// library falls back to the PATH, and the first hit there is this very binary,
+// the root's own link, since the library skips only its own proxy: that hit is
+// passed over for the next entry on the PATH that is not the binary, which is
+// what a script that runs outside any project, an autotools build in a scratch
+// directory, gets from the system; only when nothing remains is the name
+// refused, rather than dispatching itself forever. Any other answer stands,
+// installed yet or not.
+func pastLink(lib *library, found *aquawhich.FindResult, tool string) (string, error) {
+	path := found.ExePath
+	if path == "" {
+		return "", fmt.Errorf("%w: %s", errNoPath, tool)
+	}
+
+	binary, err := os.Stat(lib.root.Binary(runtime.GOOS))
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return path, nil
+		}
+
+		return "", fmt.Errorf("the binary: %w", err)
+	}
+
+	if info, statErr := os.Stat(path); statErr == nil && os.SameFile(info, binary) {
+		if past := lookPathPast(binary, tool); past != "" {
+			return past, nil
+		}
+
+		return "", fmt.Errorf("%w: %s", errNoPath, tool)
 	}
 
 	return path, nil
