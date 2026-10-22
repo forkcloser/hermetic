@@ -29,6 +29,18 @@ func TestMain(m *testing.M) {
 		return
 	}
 
+	// A job that runs these tests under a hermetic setup names its own root
+	// and manifest in the environment, which a child run as the binary would
+	// inherit over the scratch project the test built; the tests set what
+	// they need, so the process starts with none of the binary's variables.
+	for _, name := range []string{
+		hermetic.RootEnv, hermetic.ConfigEnv, hermetic.NoGlobalConfigEnv, hermetic.TokenEnv, hermetic.LogLevelEnv,
+	} {
+		if err := os.Unsetenv(name); err != nil {
+			panic(err)
+		}
+	}
+
 	m.Run()
 }
 
