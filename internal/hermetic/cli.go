@@ -184,8 +184,8 @@ func (c *generateCmd) Run(ctx context.Context, lib *library) error {
 	return ctrl.Generate(ctx, lib.logger, param, c.Packages...)
 }
 
-// whichCmd is `which`: the path the library resolves for a command name, or
-// its package's version.
+// whichCmd is `which`: the path a dispatch of the command name runs, or its
+// package's version.
 type whichCmd struct {
 	ShowVersion bool   `help:"Output the package's version instead of the path." name:"show-version"`
 	Command     string `arg:""                                                   help:"The command name."`
@@ -202,7 +202,12 @@ func (c *whichCmd) Run(ctx context.Context, lib *library) error {
 	}
 
 	if !c.ShowVersion {
-		fmt.Fprintln(lib.stdout, found.ExePath)
+		path, err := pastLink(lib, found, c.Command)
+		if err != nil {
+			return err
+		}
+
+		fmt.Fprintln(lib.stdout, path)
 
 		return nil
 	}

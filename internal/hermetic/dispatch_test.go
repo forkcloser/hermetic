@@ -1,6 +1,7 @@
 package hermetic_test
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,6 +21,117 @@ import (
 func TestDispatchPassesOverItsOwnLink(t *testing.T) {
 	t.Parallel()
 
+	rig := linkedRoot(t)
+	tool := "fakehead"
+
+	link(t, rig.root, tool)
+
+	run := exec.CommandContext(t.Context(), filepath.Join(rig.root.Bin(), exe(tool)))
+	run.Dir, run.Env = rig.outside, rig.env
+
+	out, err := run.CombinedOutput()
+	if err != nil || strings.TrimSpace(string(out)) != "fake" {
+		t.Fatalf("dispatch of %s: %v\n%s", tool, err, out)
+	}
+
+	link(t, rig.root, "nothingpast")
+
+	refused := exec.CommandContext(t.Context(), filepath.Join(rig.root.Bin(), exe("nothingpast")))
+	refused.Dir, refused.Env = rig.outside, rig.env
+
+	out, err = refused.CombinedOutput()
+	if err == nil || !strings.Contains(string(out), "resolved no path") {
+		t.Fatalf("a name with nothing past the link: err = %v, want a refusal\n%s", err, out)
+	}
+}
+
+// TestWhichAnswersPastItsOwnLink holds `which` to the dispatch's answer: for a
+// name no config has, the path printed is the system's tool past the root's
+// own link, never the link, so `$(hermetic which <tool>)` in a script names
+// what runs; a name with nothing past the link is refused the same way.
+func TestWhichAnswersPastItsOwnLink(t *testing.T) {
+	t.Parallel()
+
+	rig := linkedRoot(t)
+	tool := "fakehead"
+
+	link(t, rig.root, tool)
+
+	run := exec.CommandContext(t.Context(), rig.root.Binary(runtime.GOOS), "which", tool)
+	run.Dir, run.Env = rig.outside, rig.env
+
+	out, err := run.Output()
+	if err != nil || strings.TrimSpace(string(out)) != rig.fake {
+		t.Fatalf("which %s = %q, %v, want %s\n%s", tool, out, err, rig.fake, exitStderr(err))
+	}
+
+	link(t, rig.root, "nothingpast")
+
+	refused := exec.CommandContext(t.Context(), rig.root.Binary(runtime.GOOS), "which", "nothingpast")
+	refused.Dir, refused.Env = rig.outside, rig.env
+
+	out, err = refused.Output()
+	if err == nil || !strings.Contains(exitStderr(err), "resolved no path") {
+		t.Fatalf("which of a name with nothing past the link = %q, %v, want a refusal\n%s", out, err, exitStderr(err))
+	}
+}
+
+// TestWhichFromARootWithoutABinary holds `which` where the root holds no
+// binary, so no link can be the binary: the library's PATH answer for a name
+// no config has stands as is, rather than being refused for a binary to pass
+// over that is not there.
+func TestWhichFromARootWithoutABinary(t *testing.T) {
+	t.Parallel()
+
+	system := t.TempDir()
+	tool, name := "fakehead", "fakehead"
+
+	if runtime.GOOS == "windows" {
+		name = "fakehead.cmd"
+	}
+
+	fake := filepath.Join(system, name)
+	write(t, fake, "#!/bin/sh\necho fake\n")
+
+	if err := os.Chmod(fake, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	path := strings.Join([]string{system, "/bin", "/usr/bin"}, string(os.PathListSeparator))
+	env := append(os.Environ(), asBinary+"=1", hermetic.RootEnv+"="+t.TempDir(), "PATH="+path)
+
+	run := exec.CommandContext(t.Context(), binaryNamed(t), "which", tool)
+	run.Dir, run.Env = t.TempDir(), env
+
+	out, err := run.Output()
+	if err != nil || strings.TrimSpace(string(out)) != fake {
+		t.Fatalf("which %s from a root without a binary = %q, %v, want %s\n%s", tool, out, err, fake, exitStderr(err))
+	}
+}
+
+// exitStderr is what the child wrote to stderr when err is its exit.
+func exitStderr(err error) string {
+	if exit, ok := errors.AsType[*exec.ExitError](err); ok {
+		return string(exit.Stderr)
+	}
+
+	return ""
+}
+
+// linkedRig is a scratch root whose binary is this test binary, the
+// environment that runs the test binary as the binary on a PATH a shell has,
+// the root's bin first, decoys, then a system directory holding a fake tool at
+// fake, and a working directory outside any project.
+type linkedRig struct {
+	root    hermetic.Root
+	env     []string
+	outside string
+	fake    string
+}
+
+func linkedRoot(t *testing.T) linkedRig {
+	t.Helper()
+
 	self, execErr := os.Executable()
 	if execErr != nil {
 		t.Fatal(execErr)
@@ -36,16 +148,17 @@ func TestDispatchPassesOverItsOwnLink(t *testing.T) {
 	}
 
 	system := t.TempDir()
-	tool, fake := "fakehead", "fakehead"
+	tool, name := "fakehead", "fakehead"
 	script := "#!/bin/sh\necho fake\n"
 
 	if runtime.GOOS == "windows" {
-		fake, script = "fakehead.cmd", "@echo fake\r\n"
+		name, script = "fakehead.cmd", "@echo fake\r\n"
 	}
 
-	write(t, filepath.Join(system, fake), script)
+	fake := filepath.Join(system, name)
+	write(t, fake, script)
 
-	if err := os.Chmod(filepath.Join(system, fake), 0o700); err != nil {
+	if err := os.Chmod(fake, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	// Two decoys ahead of the script on the PATH, each under the tool's name: a
@@ -74,27 +187,7 @@ func TestDispatchPassesOverItsOwnLink(t *testing.T) {
 
 	// Outside any project, as the scripts that met this ran: a project's policy
 	// would otherwise join the output with the gate's warning.
-	outside := t.TempDir()
-
-	link(t, root, tool)
-
-	run := exec.CommandContext(t.Context(), filepath.Join(root.Bin(), exe(tool)))
-	run.Dir, run.Env = outside, env
-
-	out, err := run.CombinedOutput()
-	if err != nil || strings.TrimSpace(string(out)) != "fake" {
-		t.Fatalf("dispatch of %s: %v\n%s", tool, err, out)
-	}
-
-	link(t, root, "nothingpast")
-
-	refused := exec.CommandContext(t.Context(), filepath.Join(root.Bin(), exe("nothingpast")))
-	refused.Dir, refused.Env = outside, env
-
-	out, err = refused.CombinedOutput()
-	if err == nil || !strings.Contains(string(out), "resolved no path") {
-		t.Fatalf("a name with nothing past the link: err = %v, want a refusal\n%s", err, out)
-	}
+	return linkedRig{root: root, env: env, outside: t.TempDir(), fake: fake}
 }
 
 // link places name in the root's bin as a link to the binary, the way the
