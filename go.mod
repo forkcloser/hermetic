@@ -1,10 +1,10 @@
 module github.com/forkcloser/hermetic
 
-go 1.27.1
+go 1.27.3
 
 require (
 	github.com/alecthomas/kong v1.16.1
-	github.com/aquaproj/aqua/v2 v2.64.0
+	github.com/aquaproj/aqua/v2 v2.65.2
 	github.com/mycophonic/primordium v0.15.1
 )
 
@@ -31,7 +31,7 @@ require (
 	github.com/gdamore/tcell/v2 v2.9.0 // indirect
 	github.com/goccy/go-yaml v1.19.2 // indirect
 	github.com/godbus/dbus/v5 v5.2.2 // indirect
-	github.com/google/go-github/v92 v92.0.0 // indirect
+	github.com/google/go-github/v93 v93.0.0 // indirect
 	github.com/google/go-querystring v1.2.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/google/wire v0.7.0 // indirect
