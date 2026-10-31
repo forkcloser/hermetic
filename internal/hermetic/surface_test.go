@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -204,10 +205,15 @@ func TestNoRootForVersionAndUsage(t *testing.T) {
 // HERMETIC_CONFIG or -c, to the named config's project: the policy beside the
 // manifest goes through the gate as a walked one does, so from a working
 // directory outside the project the gate's warning names that policy; a
-// manifest with no policy beside it, a scratch copy, carries none; and without
-// a named config a working directory outside any project sees no gate at all.
+// manifest with no policy beside it, a scratch copy, carries none; the root's
+// own manifest names no project, its policy being the global one the library
+// reads already, so nothing is gated; and without a named config a working
+// directory outside any project sees no gate at all.
 func TestNamedConfigCarriesItsProject(t *testing.T) {
-	t.Setenv(hermetic.RootEnv, t.TempDir())
+	root := hermetic.Root(t.TempDir())
+	t.Setenv(hermetic.RootEnv, string(root))
+	write(t, root.GlobalConfig(), "packages: []\n")
+	write(t, root.Policy(), "registries:\n  - type: standard\n")
 
 	project := filepath.Join(t.TempDir(), "repo", hermetic.ProjectDir)
 	write(t, filepath.Join(project, hermetic.ProjectConfig), "packages: []\n")
@@ -218,17 +224,53 @@ func TestNamedConfigCarriesItsProject(t *testing.T) {
 
 	t.Chdir(t.TempDir())
 
-	for _, c := range []struct {
+	type run struct {
 		name   string
 		env    string
 		args   []string
 		policy string
-	}{
-		{"named by the variable", filepath.Join(project, hermetic.ProjectConfig), []string{"root-dir"}, filepath.Join(project, hermetic.ProjectPolicy)},
-		{"named by the flag", "", []string{"-c", filepath.Join(project, hermetic.ProjectConfig), "root-dir"}, filepath.Join(project, hermetic.ProjectPolicy)},
+	}
+
+	runs := []run{
+		{
+			"named by the variable",
+			filepath.Join(project, hermetic.ProjectConfig),
+			[]string{"root-dir"},
+			filepath.Join(project, hermetic.ProjectPolicy),
+		},
+		{
+			"named by the flag",
+			"",
+			[]string{"-c", filepath.Join(project, hermetic.ProjectConfig), "root-dir"},
+			filepath.Join(project, hermetic.ProjectPolicy),
+		},
 		{"a scratch copy", scratch, []string{"root-dir"}, ""},
+		{"the root's own manifest, by the variable", root.GlobalConfig(), []string{"root-dir"}, ""},
+		{"the root's own manifest, by the flag", "", []string{"-c", root.GlobalConfig(), "root-dir"}, ""},
 		{"nothing named, outside any project", "", []string{"root-dir"}, ""},
-	} {
+	}
+
+	// The root's manifest under another spelling of the root, as a root under
+	// macOS's /tmp is reached: the same file, so still no project. Windows
+	// runners may lack the privilege a symlink needs.
+	if runtime.GOOS != "windows" {
+		linked := filepath.Join(t.TempDir(), "link")
+		if err := os.Symlink(string(root), linked); err != nil {
+			t.Fatal(err)
+		}
+
+		runs = append(
+			runs,
+			run{
+				"the root's own manifest, through a symlinked root",
+				filepath.Join(linked, hermetic.ProjectConfig),
+				[]string{"root-dir"},
+				"",
+			},
+		)
+	}
+
+	for _, c := range runs {
 		t.Setenv(hermetic.ConfigEnv, c.env)
 
 		warned := stderrOf(t, func() {
