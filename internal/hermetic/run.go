@@ -448,6 +448,10 @@ func environment(
 		named = set[aquaConfigEnv]
 	}
 
+	if named != "" && isRootManifest(named, root) {
+		return set, unset, nil
+	}
+
 	projectDir, err := projectOf(named)
 	if err != nil {
 		return nil, nil, err
@@ -474,6 +478,25 @@ func environment(
 	}
 
 	return set, unset, nil
+}
+
+// isRootManifest reports whether the named config is the root's own manifest,
+// the machine toolset's pins: the policy beside it is the global policy the
+// library reads on every run, so it names no project and nothing of it goes
+// through the gate. Compared as files, since a root is reached through
+// symlinked paths (macOS's /tmp) as often as not.
+func isRootManifest(named string, root Root) bool {
+	manifest, err := os.Stat(named)
+	if err != nil {
+		return false
+	}
+
+	global, err := os.Stat(root.GlobalConfig())
+	if err != nil {
+		return false
+	}
+
+	return os.SameFile(manifest, global)
 }
 
 // projectOf is the project directory a run works in: the directory of the
