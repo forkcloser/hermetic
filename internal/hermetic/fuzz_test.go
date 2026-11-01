@@ -49,7 +49,9 @@ func FuzzDispatched(f *testing.F) {
 			t.Fatalf("Dispatched(%q, %s) = %q", argv0, goos, tool)
 		}
 
-		if !strings.HasSuffix(argv0, tool) && !(goos == "windows" && strings.HasSuffix(argv0, tool+".exe")) {
+		// On Windows the extension is trimmed in any case: argv[0] carries
+		// the caller's spelling.
+		if !strings.HasSuffix(argv0, tool) && !(goos == "windows" && hasExe(argv0, tool)) {
 			t.Fatalf("Dispatched(%q, %s) = %q, not the name invoked", argv0, goos, tool)
 		}
 
@@ -57,6 +59,17 @@ func FuzzDispatched(f *testing.F) {
 			t.Fatalf("args = %q, want %q", args, []string{arg})
 		}
 	})
+}
+
+// hasExe reports whether argv0 ends in tool followed by ".exe" in any case.
+func hasExe(argv0, tool string) bool {
+	const ext = ".exe"
+
+	if len(argv0) < len(tool)+len(ext) {
+		return false
+	}
+
+	return strings.EqualFold(argv0[len(argv0)-len(ext):], ext) && strings.HasSuffix(argv0[:len(argv0)-len(ext)], tool)
 }
 
 func FuzzLibraryEnvironment(f *testing.F) {
