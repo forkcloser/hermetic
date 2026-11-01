@@ -1,7 +1,6 @@
 package hermetic_test
 
 import (
-	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -204,11 +203,14 @@ func TestNoRootForVersionAndUsage(t *testing.T) {
 // TestNamedConfigCarriesItsProject holds a run that names its config, through
 // HERMETIC_CONFIG or -c, to the named config's project: the policy beside the
 // manifest goes through the gate as a walked one does, so from a working
-// directory outside the project the gate's warning names that policy; a
-// manifest with no policy beside it, a scratch copy, carries none; the root's
-// own manifest names no project, its policy being the global one the library
-// reads already, so nothing is gated; and without a named config a working
-// directory outside any project sees no gate at all.
+// directory outside the project an unallowed policy stops the run, the allow
+// command for that policy the whole of stderr, exit status 1; a denied policy
+// stops a run that names its config the same way, where the walk through the
+// same project is silent; a manifest with no policy beside it, a scratch copy,
+// carries none; the root's own manifest
+// names no project, its policy being the global one the library reads
+// already; and without a named config a working directory outside any project
+// sees no gate at all.
 func TestNamedConfigCarriesItsProject(t *testing.T) {
 	root := hermetic.Root(t.TempDir())
 	t.Setenv(hermetic.RootEnv, string(root))
@@ -222,10 +224,19 @@ func TestNamedConfigCarriesItsProject(t *testing.T) {
 	scratch := filepath.Join(t.TempDir(), "scratch", hermetic.ProjectConfig)
 	write(t, scratch, "packages: []\n")
 
-	t.Chdir(t.TempDir())
+	// A second project, denied: the record `policy deny` writes, keyed by the
+	// policy's path (the drive's colon an underscore on Windows).
+	denied := filepath.Join(t.TempDir(), "denied", hermetic.ProjectDir)
+	deniedPolicy := filepath.Join(denied, hermetic.ProjectPolicy)
+	write(t, filepath.Join(denied, hermetic.ProjectConfig), "packages: []\n")
+	write(t, deniedPolicy, "registries:\n  - type: standard\n")
+	write(t, filepath.Join(root.AquaRoot(), "policy-warnings", strings.ReplaceAll(deniedPolicy, ":", "_")), "")
+
+	outside := t.TempDir()
 
 	type run struct {
 		name   string
+		dir    string
 		env    string
 		args   []string
 		policy string
@@ -234,20 +245,37 @@ func TestNamedConfigCarriesItsProject(t *testing.T) {
 	runs := []run{
 		{
 			"named by the variable",
+			outside,
 			filepath.Join(project, hermetic.ProjectConfig),
 			[]string{"root-dir"},
 			filepath.Join(project, hermetic.ProjectPolicy),
 		},
 		{
 			"named by the flag",
+			outside,
 			"",
 			[]string{"-c", filepath.Join(project, hermetic.ProjectConfig), "root-dir"},
 			filepath.Join(project, hermetic.ProjectPolicy),
 		},
-		{"a scratch copy", scratch, []string{"root-dir"}, ""},
-		{"the root's own manifest, by the variable", root.GlobalConfig(), []string{"root-dir"}, ""},
-		{"the root's own manifest, by the flag", "", []string{"-c", root.GlobalConfig(), "root-dir"}, ""},
-		{"nothing named, outside any project", "", []string{"root-dir"}, ""},
+		{
+			"denied, named by the variable",
+			outside,
+			filepath.Join(denied, hermetic.ProjectConfig),
+			[]string{"root-dir"},
+			deniedPolicy,
+		},
+		{
+			"denied, named by the flag",
+			outside,
+			"",
+			[]string{"-c", filepath.Join(denied, hermetic.ProjectConfig), "root-dir"},
+			deniedPolicy,
+		},
+		{"denied, by the walk", filepath.Dir(denied), "", []string{"root-dir"}, ""},
+		{"a scratch copy", outside, scratch, []string{"root-dir"}, ""},
+		{"the root's own manifest, by the variable", outside, root.GlobalConfig(), []string{"root-dir"}, ""},
+		{"the root's own manifest, by the flag", outside, "", []string{"-c", root.GlobalConfig(), "root-dir"}, ""},
+		{"nothing named, outside any project", outside, "", []string{"root-dir"}, ""},
 	}
 
 	// The root's manifest under another spelling of the root, as a root under
@@ -259,99 +287,36 @@ func TestNamedConfigCarriesItsProject(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		runs = append(
-			runs,
-			run{
-				"the root's own manifest, through a symlinked root",
-				filepath.Join(linked, hermetic.ProjectConfig),
-				[]string{"root-dir"},
-				"",
-			},
-		)
+		runs = append(runs, run{
+			"the root's own manifest, through a symlinked root",
+			outside,
+			filepath.Join(linked, hermetic.ProjectConfig),
+			[]string{"root-dir"},
+			"",
+		})
 	}
 
 	for _, c := range runs {
+		t.Chdir(c.dir)
 		t.Setenv(hermetic.ConfigEnv, c.env)
 
-		warned := stderrOf(t, func() {
-			if out, err := invoke(t, c.args...); err != nil {
+		out, err := invoke(t, c.args...)
+
+		if c.policy == "" {
+			if err != nil {
 				t.Fatalf("%s: %v\n%s", c.name, err, out)
 			}
-		})
 
-		gated, found := gatedPolicy(t, warned)
-
-		switch {
-		case c.policy == "" && found:
-			t.Fatalf("%s: a policy was gated where none is carried: %q\n%s", c.name, gated, warned)
-		case c.policy != "" && !found:
-			t.Fatalf("%s: the named config's policy was not gated:\n%s", c.name, warned)
-		case c.policy != "" && gated != c.policy:
-			t.Fatalf("%s: the gate names %q, want %q", c.name, gated, c.policy)
-		}
-	}
-}
-
-// stderrOf runs function with the process's stderr swapped for a pipe and
-// returns what was written: the process-wide log handler Run installs writes
-// there, not on the Env's stream.
-func stderrOf(t *testing.T, function func()) string {
-	t.Helper()
-
-	reader, writer, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	captured := make(chan string, 1)
-
-	go func() {
-		out, _ := io.ReadAll(reader)
-		captured <- string(out)
-	}()
-
-	stderr := os.Stderr
-	os.Stderr = writer //nolint:reassign // the handler Run installs writes on os.Stderr; the swap is how a test reads it.
-
-	function()
-
-	os.Stderr = stderr //nolint:reassign // restored.
-
-	_ = writer.Close()
-	out := <-captured
-	_ = reader.Close()
-
-	return out
-}
-
-// gatedPolicy is the policy the gate's warning names among the JSON records
-// on logged, decoded so a Windows path compares as logged, and whether there
-// is one.
-func gatedPolicy(t *testing.T, logged string) (string, bool) {
-	t.Helper()
-
-	for line := range strings.SplitSeq(strings.TrimSpace(logged), "\n") {
-		if line == "" {
 			continue
 		}
 
-		var record map[string]any
-		if err := json.Unmarshal([]byte(line), &record); err != nil {
-			t.Fatalf("decode the log record %q: %v", line, err)
+		exit, asked := errors.AsType[shutdown.ExitError](err)
+		if !asked || exit != 1 {
+			t.Fatalf("%s: err = %v, want exit status 1\n%s", c.name, err, out)
 		}
 
-		msg, isText := record["msg"].(string)
-		if !isText || !strings.Contains(msg, "ignored until allowed") {
-			continue
+		if want := "hermetic policy allow " + c.policy + "\n"; out != want {
+			t.Fatalf("%s: the run said %q, want %q", c.name, out, want)
 		}
-
-		policy, isPath := record["policy"].(string)
-		if !isPath {
-			t.Fatalf("the gate's warning carries no policy path: %s", line)
-		}
-
-		return policy, true
 	}
-
-	return "", false
 }
