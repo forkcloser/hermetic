@@ -128,7 +128,7 @@ func Run(ctx context.Context, env *Env) error {
 		}
 
 		if runErr := kctx.Run(); runErr != nil {
-			return fmt.Errorf("%s: %w", kctx.Command(), runErr)
+			return refusal(env, fmt.Errorf("%s: %w", kctx.Command(), runErr))
 		}
 
 		return nil
@@ -139,7 +139,7 @@ func Run(ctx context.Context, env *Env) error {
 
 	lib, err := newLibrary(ctx, log, env, "", false, level)
 	if err != nil {
-		return err
+		return refusal(env, err)
 	}
 
 	path, err := resolve(ctx, lib, tool)
@@ -150,6 +150,20 @@ func Run(ctx context.Context, env *Env) error {
 	syncBin(ctx, log, lib.root)
 
 	return execTool(ctx, path, tool, toolArgs, ToolEnvironment(shell))
+}
+
+// refusal turns the gate's refusal into the run's last word: the command that
+// allows the policy, alone on stderr, and exit status 1 with nothing logged.
+// Any other error is returned as it is.
+func refusal(env *Env, err error) error {
+	refused, ok := errors.AsType[*RefusedPolicyError](err)
+	if !ok {
+		return err
+	}
+
+	fmt.Fprintln(env.Stderr, refused.Error())
+
+	return shutdown.ExitError(1) //nolint:wrapcheck // the status is the answer; the refusal is on stderr.
 }
 
 // newLibrary is the library as a command runs it: the root, the environment
@@ -168,7 +182,7 @@ func newLibrary(
 		return nil, err
 	}
 
-	set, unset, err := environment(log, root, configFlag, keepsGate, os.Environ())
+	set, unset, err := environment(root, configFlag, keepsGate, os.Environ())
 	if err != nil {
 		return nil, err
 	}
@@ -432,7 +446,6 @@ func apply(set map[string]string, unset []string) error {
 // subcommands are the gate's own keepers (keepsGate): `policy allow` must not
 // warn about the record it is about to write.
 func environment(
-	logger *slog.Logger,
 	root Root,
 	configFlag string,
 	keepsGate bool,
@@ -462,7 +475,14 @@ func environment(
 	}
 
 	if !keepsGate {
-		policyPath, err := ProjectPolicyPath(logger, root.AquaRoot(), projectDir)
+		policyPath, err := ProjectPolicyPath(root.AquaRoot(), projectDir)
+		// Denied by the walk: the repository's config is ignored and the
+		// root's pins answer. Denied but named outright, the refusal stands:
+		// naming the config asks for it.
+		if refused, ok := errors.AsType[*RefusedPolicyError](err); ok && refused.Denied && named == "" {
+			return set, unset, nil
+		}
+
 		if err != nil {
 			return nil, nil, err
 		}

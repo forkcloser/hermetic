@@ -183,10 +183,11 @@ func lastLine(out string) string {
 }
 
 // The records the gate keeps, through the binary's own commands: allowed, the
-// policy is used and nothing is said; changed, it is dropped and said to have
-// changed; denied, it is dropped and nothing is said; the deny record gone,
-// the warning returns; and `policy allow` itself never warns about the
-// record it is about to write.
+// policy is used and nothing is said; no record or a stale one, the run
+// stops with exit status 1 and the allow command for the policy as its whole
+// output; denied, the repository's config is ignored and the root's pins
+// answer, silently; the deny record gone, the refusal returns; and
+// `policy allow` and `policy deny` themselves run without the gate.
 func TestPolicyRecordsAtTheBinary(t *testing.T) {
 	t.Parallel()
 
@@ -201,6 +202,7 @@ func TestPolicyRecordsAtTheBinary(t *testing.T) {
 	env := append(os.Environ(), asBinary+"=1", hermetic.RootEnv+"="+root)
 	record := filepath.Join(root, "store", "policies", strings.ReplaceAll(policy, ":", "_"))
 	denied := filepath.Join(root, "store", "policy-warnings", strings.ReplaceAll(policy, ":", "_"))
+	allow := "hermetic policy allow " + policy + "\n"
 
 	run := func(args ...string) string {
 		t.Helper()
@@ -213,12 +215,16 @@ func TestPolicyRecordsAtTheBinary(t *testing.T) {
 		return out
 	}
 
-	ignored := "ignored until allowed"
-	changed := "changed since it was allowed"
+	refused := func(when string) {
+		t.Helper()
 
-	if out := run("root-dir"); !strings.Contains(out, ignored) {
-		t.Fatalf("no record: the gate did not warn:\n%s", out)
+		out, err := binary(t, path, project, env, "root-dir")
+		if exitStatus(err) != 1 || out != allow {
+			t.Fatalf("%s: exit %d, said %q; want exit 1 and %q", when, exitStatus(err), out, allow)
+		}
 	}
+
+	refused("no record")
 
 	if out := run(
 		"policy",
@@ -226,24 +232,22 @@ func TestPolicyRecordsAtTheBinary(t *testing.T) {
 		filepath.Join(hermetic.ProjectDir, hermetic.ProjectPolicy),
 	); strings.Contains(
 		out,
-		ignored,
+		"policy allow",
 	) {
-		t.Fatalf("policy allow warned about the record it writes:\n%s", out)
+		t.Fatalf("policy allow refused the record it writes:\n%s", out)
 	}
 
 	if body, err := os.ReadFile(record); err != nil || string(body) != "registries:\n  - type: standard\n" {
 		t.Fatalf("the allow record: %q, %v", body, err)
 	}
 
-	if out := run("root-dir"); strings.Contains(out, ignored) || strings.Contains(out, changed) {
-		t.Fatalf("allowed: the gate warned:\n%s", out)
+	if out := run("root-dir"); strings.Contains(out, "policy allow") {
+		t.Fatalf("allowed: the gate refused:\n%s", out)
 	}
 
 	write(t, policy, "registries:\n  - type: standard\npackages: []\n")
 
-	if out := run("root-dir"); !strings.Contains(out, changed) {
-		t.Fatalf("changed: the gate did not say so:\n%s", out)
-	}
+	refused("changed")
 
 	if out := run(
 		"policy",
@@ -251,9 +255,9 @@ func TestPolicyRecordsAtTheBinary(t *testing.T) {
 		filepath.Join(hermetic.ProjectDir, hermetic.ProjectPolicy),
 	); strings.Contains(
 		out,
-		ignored,
+		"policy allow",
 	) {
-		t.Fatalf("policy deny warned:\n%s", out)
+		t.Fatalf("policy deny refused:\n%s", out)
 	}
 
 	if _, err := os.Stat(record); err == nil {
@@ -264,21 +268,19 @@ func TestPolicyRecordsAtTheBinary(t *testing.T) {
 		t.Fatalf("the deny record: %v", err)
 	}
 
-	if out := run("root-dir"); strings.Contains(out, ignored) || strings.Contains(out, changed) {
-		t.Fatalf("denied: the gate warned:\n%s", out)
+	if out := run("root-dir"); strings.Contains(out, "policy allow") {
+		t.Fatalf("denied: the gate refused:\n%s", out)
 	}
 
 	if err := os.Remove(denied); err != nil {
 		t.Fatal(err)
 	}
 
-	if out := run("root-dir"); !strings.Contains(out, ignored) {
-		t.Fatalf("deny record gone: the gate did not warn:\n%s", out)
-	}
+	refused("deny record gone")
 
 	// Outside the project the gate has nothing to say, and the allow record
 	// of another project is not consulted.
-	if out, err := binary(t, path, t.TempDir(), env, "root-dir"); err != nil || strings.Contains(out, ignored) {
+	if out, err := binary(t, path, t.TempDir(), env, "root-dir"); err != nil || strings.Contains(out, "policy allow") {
 		t.Fatalf("outside any project: %v\n%s", err, out)
 	}
 }

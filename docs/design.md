@@ -198,17 +198,24 @@ checkout; a scratch copy with no policy beside it carries none, and the root's o
 manifest names no project: the policy beside it is the global one, read on every
 run, so the installer that names it is not told to allow it.
 
-The project's policy keeps its gate. Everything `AQUA_POLICY_CONFIG` names is
-trusted on sight by the library; only a policy its own finder locates beside a
-config is validated against the record `policy allow` wrote under
-`<root>/store/policies/`, and dropped with a warning when the record is missing or
-stale, so a cloned repository cannot allow a registry of its choosing and have the
-lazy install run that registry's binary under a tool's name. Our walk replaces the
-finder, so the binary does the validation itself with the library's exported
-validator: `.hermetic/policy.yaml` joins `AQUA_POLICY_CONFIG` only when its record
-under `<root>/store/policies/` matches, and is otherwise dropped with the same
-warning. `hermetic policy allow .hermetic/policy.yaml` stays the one-time
-gate per machine, in the setup action and the book under the new path. The one
+The project's policy keeps its gate, and a project's config is trusted whole or not
+at all. Everything `AQUA_POLICY_CONFIG` names is trusted on sight by the library;
+only a policy its own finder locates beside a config is validated against the
+record `policy allow` wrote under `<root>/store/policies/`, so a cloned repository
+cannot allow a registry of its choosing and have the lazy install run that
+registry's binary under a tool's name. Our walk replaces the finder, so the binary
+does the validation itself with the library's exported validator. Allowed, the
+record matching byte for byte, `.hermetic/policy.yaml` joins `AQUA_POLICY_CONFIG`
+and the run goes on. Neither allowed nor denied, the record missing or stale, the
+run stops before resolving anything, and the whole of what it says is the command
+that allows the policy, `hermetic policy allow <absolute path>/.hermetic/policy.yaml`:
+in a fresh clone `just` is the first thing that stops, and the message is the fix;
+on a runner the setup action has allowed the policy before any recipe runs. Denied,
+`policy deny` having recorded the human's choice, the walk ignores the repository's
+config outright and the root's pins answer, silently; a config named outright by
+`-c` or `HERMETIC_CONFIG` while denied is refused the same way as one never
+allowed, since naming it asks for it. `policy allow` and `policy deny` themselves
+run without the gate, so the command the refusal names always works. The one
 policy trusted on sight is the toolset's own, in the root, as today, and it is
 listed only while the root holds one: a root with no toolset in it, a runner's
 or a fresh session's, has no policy of its own, and the library refuses a
