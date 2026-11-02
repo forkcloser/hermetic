@@ -327,30 +327,29 @@ func resolve(ctx context.Context, lib *library, tool string) (string, error) {
 }
 
 // pastLink is where a which answer leads. For a name no config has, the
-// library falls back to the PATH, and the first hit there is this very binary,
-// the root's own link, since the library skips only its own proxy: that hit is
-// passed over for the next entry on the PATH that is not the binary, which is
-// what a script that runs outside any project, an autotools build in a scratch
-// directory, gets from the system; only when nothing remains is the name
-// refused, rather than dispatching itself forever. Any other answer stands,
-// installed yet or not.
+// library falls back to the PATH, and the first hit there is a link to this
+// binary, the root's own, since the library skips only its own proxy: that hit
+// is passed over for the next entry on the PATH that is neither the binary
+// running nor the root's binary, which is what a script that runs outside any
+// project, an autotools build in a scratch directory, gets from the system;
+// only when nothing remains is the name refused, rather than dispatching itself
+// forever. The binary running is a self in its own right: a link to it runs
+// under a root whose binary is another file when HERMETIC_ROOT_DIR says so, and
+// comparing with the root's alone handed the link back to itself. Any other
+// answer stands, installed yet or not.
 func pastLink(lib *library, found *aquawhich.FindResult, tool string) (string, error) {
 	path := found.ExePath
 	if path == "" {
 		return "", fmt.Errorf("%w: %s", errNoPath, tool)
 	}
 
-	binary, err := os.Stat(lib.root.Binary(runtime.GOOS))
+	selves, err := selves(lib.root)
 	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return path, nil
-		}
-
-		return "", fmt.Errorf("the binary: %w", err)
+		return "", err
 	}
 
-	if info, statErr := os.Stat(path); statErr == nil && os.SameFile(info, binary) {
-		if past := lookPathPast(binary, tool); past != "" {
+	if info, statErr := os.Stat(path); statErr == nil && isAny(info, selves) {
+		if past := lookPathPast(selves, tool); past != "" {
 			return past, nil
 		}
 
@@ -360,10 +359,48 @@ func pastLink(lib *library, found *aquawhich.FindResult, tool string) (string, e
 	return path, nil
 }
 
-// lookPathPast is the first executable named tool on the PATH that is not the
-// binary: every entry whose file is the binary, the root's bin and any other
-// link to it, is passed over.
-func lookPathPast(binary os.FileInfo, tool string) string {
+// selves is every file a PATH entry must not resolve to: the binary running,
+// and the root's binary when the root holds one.
+func selves(root Root) ([]os.FileInfo, error) {
+	self, err := os.Executable()
+	if err != nil {
+		return nil, fmt.Errorf("the binary running: %w", err)
+	}
+
+	running, err := os.Stat(self)
+	if err != nil {
+		return nil, fmt.Errorf("the binary running: %w", err)
+	}
+
+	files := []os.FileInfo{running}
+
+	binary, err := os.Stat(root.Binary(runtime.GOOS))
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return files, nil
+		}
+
+		return nil, fmt.Errorf("the binary: %w", err)
+	}
+
+	return append(files, binary), nil
+}
+
+// isAny reports whether info is one of the files.
+func isAny(info os.FileInfo, files []os.FileInfo) bool {
+	for _, file := range files {
+		if os.SameFile(info, file) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// lookPathPast is the first executable named tool on the PATH that is none of
+// the selves: every entry whose file is the binary running or the root's, the
+// root's bin and any other link to either, is passed over.
+func lookPathPast(selves []os.FileInfo, tool string) string {
 	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
 		if dir == "" {
 			continue
@@ -371,7 +408,7 @@ func lookPathPast(binary os.FileInfo, tool string) string {
 
 		for _, name := range toolNames(tool) {
 			// #nosec G703 -- the PATH is the shell's own, read as any lookup reads it.
-			if candidate := filepath.Join(dir, name); runnable(candidate, binary) {
+			if candidate := filepath.Join(dir, name); runnable(candidate, selves) {
 				return candidate
 			}
 		}
@@ -399,11 +436,12 @@ func toolNames(tool string) []string {
 	return names
 }
 
-// runnable reports whether path is an executable file that is not the binary.
-func runnable(path string, binary os.FileInfo) bool {
+// runnable reports whether path is an executable file that is none of the
+// selves.
+func runnable(path string, selves []os.FileInfo) bool {
 	// #nosec G703 -- the path is a PATH entry joined with the tool's name, read as any lookup reads it.
 	info, err := os.Stat(path)
-	if err != nil || info.IsDir() || os.SameFile(info, binary) {
+	if err != nil || info.IsDir() || isAny(info, selves) {
 		return false
 	}
 

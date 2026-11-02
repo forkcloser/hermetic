@@ -49,6 +49,36 @@ func TestDispatchPassesOverItsOwnLink(t *testing.T) {
 	}
 }
 
+// TestDispatchPassesOverTheRunningBinary holds a dispatch whose root is not the
+// one its link lives in: HERMETIC_ROOT_DIR names a root whose binary is another
+// file, so the link the dispatch came through is not that root's binary, and
+// the library's PATH fallback hands it back. The binary running is passed over
+// as the root's is, to the system's tool; before, the dispatch ran its own link
+// again, forever. The child is bounded, since the failure is a loop.
+func TestDispatchPassesOverTheRunningBinary(t *testing.T) {
+	t.Parallel()
+
+	rig := linkedRoot(t)
+	tool := "fakehead"
+
+	link(t, rig.root, tool)
+
+	other := hermetic.Root(t.TempDir())
+	write(t, other.Binary(runtime.GOOS), "not the binary running\n")
+
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+
+	run := exec.CommandContext(ctx, filepath.Join(rig.root.Bin(), exe(tool)))
+	run.Dir = rig.outside
+	run.Env = append(slices.Clone(rig.env), hermetic.RootEnv+"="+string(other))
+
+	out, err := run.CombinedOutput()
+	if err != nil || strings.TrimSpace(string(out)) != "fake" {
+		t.Fatalf("dispatch of %s under another root: %v\n%s", tool, err, out)
+	}
+}
+
 // TestWhichAnswersPastItsOwnLink holds `which` to the dispatch's answer: for a
 // name no config has, the path printed is the system's tool past the root's
 // own link, never the link, so `$(hermetic which <tool>)` in a script names
