@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 
 	"github.com/mycophonic/primordium/app/shutdown"
 )
@@ -18,7 +20,13 @@ import (
 func execTool(ctx context.Context, path, name string, args, environ []string) error {
 	// #nosec G204 -- the path is what the library resolved for the name, the arguments the user's own.
 	cmd := exec.CommandContext(ctx, path, args...)
-	cmd.Args[0] = name
+	// A batch file runs as cmd.exe /c on the command line, not the path: under
+	// the bare name, cmd.exe would look the name up on the PATH again, where a
+	// link to this binary may come first, and dispatch forever.
+	if !isBatch(path) {
+		cmd.Args[0] = name
+	}
+
 	cmd.Env = environ
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
@@ -34,4 +42,11 @@ func execTool(ctx context.Context, path, name string, args, environ []string) er
 	}
 
 	return nil
+}
+
+// isBatch reports whether path is a file Windows hands to cmd.exe.
+func isBatch(path string) bool {
+	ext := filepath.Ext(path)
+
+	return strings.EqualFold(ext, ".bat") || strings.EqualFold(ext, ".cmd")
 }
