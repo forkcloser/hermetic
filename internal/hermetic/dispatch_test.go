@@ -1,13 +1,17 @@
 package hermetic_test
 
 import (
+	"bytes"
+	"context"
 	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/forkcloser/hermetic/internal/hermetic"
 )
@@ -109,6 +113,42 @@ func TestWhichFromARootWithoutABinary(t *testing.T) {
 	}
 }
 
+// TestDispatchRunsTheFileItResolved holds a dispatch to the file it resolved,
+// not to the name: a link to the binary outside the root's bin comes first on
+// the PATH, and the dispatch passes it over for the script. On Windows the
+// script is a batch file, which cmd.exe runs from the command line: under the
+// bare name it looked the name up on the PATH again, found the link, and
+// dispatched forever. The child is bounded, since the failure is a loop.
+func TestDispatchRunsTheFileItResolved(t *testing.T) {
+	t.Parallel()
+
+	rig := linkedRoot(t)
+	tool := "fakehead"
+
+	elsewhere := t.TempDir()
+	ahead := filepath.Join(elsewhere, exe(tool))
+
+	if err := os.Link(rig.root.Binary(runtime.GOOS), ahead); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancel()
+
+	run := exec.CommandContext(ctx, ahead)
+	run.Dir = rig.outside
+	run.Env = append(slices.Clone(rig.env), "PATH="+elsewhere+string(os.PathListSeparator)+rig.path)
+
+	var stdout, stderr bytes.Buffer
+
+	run.Stdout, run.Stderr = &stdout, &stderr
+
+	if err := run.Run(); err != nil || strings.TrimSpace(stdout.String()) != "fake" {
+		t.Fatalf("dispatch of %s past a link ahead on the PATH: %v\nstdout:\n%s\nstderr:\n%s",
+			tool, err, stdout.String(), stderr.String())
+	}
+}
+
 // exitStderr is what the child wrote to stderr when err is its exit.
 func exitStderr(err error) string {
 	if exit, ok := errors.AsType[*exec.ExitError](err); ok {
@@ -121,10 +161,11 @@ func exitStderr(err error) string {
 // linkedRig is a scratch root whose binary is this test binary, the
 // environment that runs the test binary as the binary on a PATH a shell has,
 // the root's bin first, decoys, then a system directory holding a fake tool at
-// fake, and a working directory outside any project.
+// fake, that PATH alone, and a working directory outside any project.
 type linkedRig struct {
 	root    hermetic.Root
 	env     []string
+	path    string
 	outside string
 	fake    string
 }
@@ -187,7 +228,7 @@ func linkedRoot(t *testing.T) linkedRig {
 
 	// Outside any project, as the scripts that met this ran: a project's policy
 	// would otherwise join the output with the gate's warning.
-	return linkedRig{root: root, env: env, outside: t.TempDir(), fake: fake}
+	return linkedRig{root: root, env: env, path: path, outside: t.TempDir(), fake: fake}
 }
 
 // link places name in the root's bin as a link to the binary, the way the
