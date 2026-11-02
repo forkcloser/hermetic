@@ -49,7 +49,7 @@ func FuzzDispatched(f *testing.F) {
 			t.Fatalf("Dispatched(%q, %s) = %q", argv0, goos, tool)
 		}
 
-		if !strings.HasSuffix(argv0, tool) && !(goos == "windows" && strings.HasSuffix(argv0, tool+".exe")) {
+		if !strings.HasSuffix(argv0, tool) && !(goos == "windows" && invokedWithExe(argv0, tool)) {
 			t.Fatalf("Dispatched(%q, %s) = %q, not the name invoked", argv0, goos, tool)
 		}
 
@@ -194,4 +194,14 @@ func FuzzToolEnvironment(f *testing.F) {
 			t.Fatalf("tool environment = %q, want %q", got, want)
 		}
 	})
+}
+
+// invokedWithExe reports whether argv0 is tool followed by ".exe" in any case,
+// as a Windows caller may spell it.
+func invokedWithExe(argv0, tool string) bool {
+	const ext = len(".exe")
+
+	return len(argv0) >= len(tool)+ext &&
+		strings.EqualFold(argv0[len(argv0)-ext:], ".exe") &&
+		strings.HasSuffix(argv0[:len(argv0)-ext], tool)
 }
