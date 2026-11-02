@@ -1,13 +1,21 @@
-package hermetic
+// Package dispatch is the binary invoked under a tool's name, through a link in
+// the root's bin: which tool, where it lives when no config pins it, the
+// environment it runs in, and the run itself (docs/design.md, "It dispatches on
+// argv[0]").
+package dispatch
 
 import (
 	"strings"
+
+	"github.com/forkcloser/hermetic/internal/rootdir"
 )
 
-// Dispatched tells whether the binary was invoked under another name, through
+const windows = "windows"
+
+// Target tells whether the binary was invoked under another name, through
 // a link in the root's bin: then that name is the tool to run, with the rest
 // of the arguments. Under its own name the binary is aqua, and tool is "".
-func Dispatched(args []string, goos string) (tool string, toolArgs []string) {
+func Target(args []string, goos string) (tool string, toolArgs []string) {
 	if len(args) == 0 {
 		return "", nil
 	}
@@ -15,12 +23,12 @@ func Dispatched(args []string, goos string) (tool string, toolArgs []string) {
 	name := baseName(args[0], goos)
 	if goos == windows {
 		name = trimExe(name)
-		if strings.EqualFold(name, Name) {
+		if strings.EqualFold(name, rootdir.Name) {
 			return "", nil
 		}
 	}
 
-	if name == Name {
+	if name == rootdir.Name {
 		return "", nil
 	}
 

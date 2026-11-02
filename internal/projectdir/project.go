@@ -1,4 +1,7 @@
-package hermetic
+// Package projectdir is a project's own directory: finding it from a working
+// directory, and the gate its policy passes before the library trusts it
+// (docs/design.md, "The project directory").
+package projectdir
 
 import (
 	"errors"
@@ -12,30 +15,30 @@ import (
 // aqua's own finder does not look for; the binary finds it and names the config
 // to the library through AQUA_CONFIG.
 const (
-	ProjectDir    = ".hermetic"
-	ProjectConfig = "hermetic.yaml"
-	ProjectPolicy = "policy.yaml"
+	Dir    = ".hermetic"
+	Config = "hermetic.yaml"
+	Policy = "policy.yaml"
 )
 
-// FindProject walks upward from wd for ProjectDir/ProjectConfig and returns the
+// Find walks upward from wd for Dir/Config and returns the
 // project directory's absolute path, "" when no directory up to the filesystem
 // root carries one.
-func FindProject(wd string) (string, error) {
+func Find(wd string) (string, error) {
 	dir, err := filepath.Abs(wd)
 	if err != nil {
 		return "", fmt.Errorf("resolve the working directory: %w", err)
 	}
 
 	for {
-		candidate := filepath.Join(dir, ProjectDir)
+		candidate := filepath.Join(dir, Dir)
 
-		_, err := os.Stat(filepath.Join(candidate, ProjectConfig))
+		_, err := os.Stat(filepath.Join(candidate, Config))
 		switch {
 		case err == nil:
 			return candidate, nil
 		case errors.Is(err, fs.ErrNotExist):
 		default:
-			return "", fmt.Errorf("look for %s: %w", filepath.Join(candidate, ProjectConfig), err)
+			return "", fmt.Errorf("look for %s: %w", filepath.Join(candidate, Config), err)
 		}
 
 		parent := filepath.Dir(dir)

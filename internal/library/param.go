@@ -1,4 +1,4 @@
-package hermetic
+package library
 
 import (
 	"fmt"
@@ -10,17 +10,19 @@ import (
 	"github.com/aquaproj/aqua/v2/pkg/config"
 	finder "github.com/aquaproj/aqua/v2/pkg/config-finder"
 	"github.com/aquaproj/aqua/v2/pkg/policy"
+
+	"github.com/forkcloser/hermetic/internal/rootdir"
 )
 
 // libraryParam is what the library's controllers run under, derived from the
-// environment the binary set for them (set, as LibraryEnvironment returns it)
+// environment the binary set for them (set, as Environment returns it)
 // and nothing else: not the library's own flag layer, and not its settings
 // file, which stays the human's because every value it could supply is pinned
 // in set. A command that names its config (configFlag) wins over the project
 // walk's AQUA_CONFIG.
 func libraryParam(
 	logger *slog.Logger,
-	root Root,
+	root rootdir.Root,
 	set map[string]string,
 	version, configFlag, logLevel string,
 ) (*config.Param, error) {

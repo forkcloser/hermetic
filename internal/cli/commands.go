@@ -1,17 +1,16 @@
-package hermetic
+package cli
 
 import (
 	"context"
 	"fmt"
-	"io"
-	"log/slog"
 	"net/http"
 	"strings"
 
 	"github.com/alecthomas/kong"
-	"github.com/aquaproj/aqua/v2/pkg/config"
 	"github.com/aquaproj/aqua/v2/pkg/controller"
-	aquaruntime "github.com/aquaproj/aqua/v2/pkg/runtime"
+
+	"github.com/forkcloser/hermetic/internal/dispatch"
+	"github.com/forkcloser/hermetic/internal/library"
 )
 
 // grammar is the binary's grammar under its own name: the library's commands the
@@ -36,23 +35,6 @@ type grammar struct {
 	VersionCommand versionCmd        `cmd:""        help:"Show the version."                                    name:"version"`
 }
 
-// library is what a command runs the library with: its logger and runtime, the
-// parameters the binary derived for it, and the stream a command answers on. A command copies the parameters before it
-// fills its own fields.
-type library struct {
-	logger  *slog.Logger
-	root    Root
-	runtime *aquaruntime.Runtime
-	base    *config.Param
-	stdout  io.Writer
-}
-
-func (lib *library) param() *config.Param {
-	param := *lib.base
-
-	return &param
-}
-
 // installCmd is `install`: the library's, under the flags the toolset uses.
 type installCmd struct {
 	OnlyLink    bool     `help:"Create links but skip downloading packages."      short:"l"`
@@ -63,24 +45,24 @@ type installCmd struct {
 }
 
 // Run installs through the library, then mirrors what it exposed.
-func (c *installCmd) Run(ctx context.Context, lib *library) error {
-	param := lib.param()
+func (c *installCmd) Run(ctx context.Context, lib *library.Library) error {
+	param := lib.Param()
 	param.OnlyLink = c.OnlyLink
 	param.All = c.All
 	param.Tags = parseTags(c.Tags)
 	param.ExcludedTags = parseTags(c.ExcludeTags)
 	param.Args = c.Names
 
-	ctrl, err := controller.InitializeInstallCommandController(ctx, lib.logger, param, http.DefaultClient, lib.runtime)
+	ctrl, err := controller.InitializeInstallCommandController(ctx, lib.Logger, param, http.DefaultClient, lib.Runtime)
 	if err != nil {
 		return fmt.Errorf("initialize the install controller: %w", err)
 	}
 
-	if err := ctrl.Install(ctx, lib.logger, param); err != nil {
+	if err := ctrl.Install(ctx, lib.Logger, param); err != nil {
 		return err
 	}
 
-	syncBin(ctx, lib.logger, lib.root)
+	syncBin(ctx, lib.Logger, lib.Root)
 
 	return nil
 }
@@ -99,8 +81,8 @@ type updateCmd struct {
 }
 
 // Run updates through the library, then mirrors what it exposed.
-func (c *updateCmd) Run(ctx context.Context, lib *library) error {
-	param := lib.param()
+func (c *updateCmd) Run(ctx context.Context, lib *library.Library) error {
+	param := lib.Param()
 	param.Insert = c.Interactive
 	param.SelectVersion = c.SelectVersion
 	param.OnlyPackage = c.OnlyPackage
@@ -110,16 +92,16 @@ func (c *updateCmd) Run(ctx context.Context, lib *library) error {
 	param.ExcludedTags = parseTags(c.ExcludeTags)
 	param.Args = c.Packages
 
-	ctrl, err := controller.InitializeUpdateCommandController(ctx, lib.logger, param, http.DefaultClient, lib.runtime)
+	ctrl, err := controller.InitializeUpdateCommandController(ctx, lib.Logger, param, http.DefaultClient, lib.Runtime)
 	if err != nil {
 		return fmt.Errorf("initialize the update controller: %w", err)
 	}
 
-	if err := ctrl.Update(ctx, lib.logger, param); err != nil {
+	if err := ctrl.Update(ctx, lib.Logger, param); err != nil {
 		return err
 	}
 
-	syncBin(ctx, lib.logger, lib.root)
+	syncBin(ctx, lib.Logger, lib.Root)
 
 	return nil
 }
@@ -131,23 +113,23 @@ type updateChecksumCmd struct {
 }
 
 // Run rewrites the checksums through the library.
-func (c *updateChecksumCmd) Run(ctx context.Context, lib *library) error {
-	param := lib.param()
+func (c *updateChecksumCmd) Run(ctx context.Context, lib *library.Library) error {
+	param := lib.Param()
 	param.All = c.All
 	param.Prune = c.Prune
 
 	ctrl, err := controller.InitializeUpdateChecksumCommandController(
 		ctx,
-		lib.logger,
+		lib.Logger,
 		param,
 		http.DefaultClient,
-		lib.runtime,
+		lib.Runtime,
 	)
 	if err != nil {
 		return fmt.Errorf("initialize the update-checksum controller: %w", err)
 	}
 
-	return ctrl.UpdateChecksum(ctx, lib.logger, param)
+	return ctrl.UpdateChecksum(ctx, lib.Logger, param)
 }
 
 // generateCmd is `generate`: the library's, with every flag it has.
@@ -165,8 +147,8 @@ type generateCmd struct {
 }
 
 // Run generates through the library.
-func (c *generateCmd) Run(ctx context.Context, lib *library) error {
-	param := lib.param()
+func (c *generateCmd) Run(ctx context.Context, lib *library.Library) error {
+	param := lib.Param()
 	param.File = c.File
 	param.Insert = c.Insert
 	param.Pin = c.Pin
@@ -176,12 +158,12 @@ func (c *generateCmd) Run(ctx context.Context, lib *library) error {
 	param.SelectVersion = c.SelectVersion
 	param.Limit = c.Limit
 
-	ctrl, err := controller.InitializeGenerateCommandController(ctx, lib.logger, param, http.DefaultClient, lib.runtime)
+	ctrl, err := controller.InitializeGenerateCommandController(ctx, lib.Logger, param, http.DefaultClient, lib.Runtime)
 	if err != nil {
 		return fmt.Errorf("initialize the generate controller: %w", err)
 	}
 
-	return ctrl.Generate(ctx, lib.logger, param, c.Packages...)
+	return ctrl.Generate(ctx, lib.Logger, param, c.Packages...)
 }
 
 // whichCmd is `which`: the path a dispatch of the command name runs, or its
@@ -192,22 +174,22 @@ type whichCmd struct {
 }
 
 // Run prints the path, or the version, the library resolves.
-func (c *whichCmd) Run(ctx context.Context, lib *library) error {
-	param := lib.param()
+func (c *whichCmd) Run(ctx context.Context, lib *library.Library) error {
+	param := lib.Param()
 	param.ShowVersion = c.ShowVersion
 
-	found, err := which(ctx, lib, param, c.Command)
+	found, err := lib.Which(ctx, param, c.Command)
 	if err != nil {
 		return err
 	}
 
 	if !c.ShowVersion {
-		path, err := pastLink(lib, found, c.Command)
+		path, err := dispatch.PastLink(lib.Root, found.ExePath, c.Command)
 		if err != nil {
 			return err
 		}
 
-		fmt.Fprintln(lib.stdout, path)
+		fmt.Fprintln(lib.Stdout, path)
 
 		return nil
 	}
@@ -216,7 +198,7 @@ func (c *whichCmd) Run(ctx context.Context, lib *library) error {
 		return fmt.Errorf("%w: %s", errNotManaged, c.Command)
 	}
 
-	fmt.Fprintln(lib.stdout, found.Package.Package.Version)
+	fmt.Fprintln(lib.Stdout, found.Package.Package.Version)
 
 	return nil
 }
@@ -233,11 +215,11 @@ type policyAllowCmd struct {
 }
 
 // Run records the policy as allowed.
-func (c *policyAllowCmd) Run(ctx context.Context, lib *library) error {
-	param := lib.param()
+func (c *policyAllowCmd) Run(ctx context.Context, lib *library.Library) error {
+	param := lib.Param()
 
 	return controller.InitializeAllowPolicyCommandController(ctx, param).
-		Allow(lib.logger, param, c.PolicyPath)
+		Allow(lib.Logger, param, c.PolicyPath)
 }
 
 // policyDenyCmd is `policy deny`.
@@ -246,11 +228,11 @@ type policyDenyCmd struct {
 }
 
 // Run removes the policy's record.
-func (c *policyDenyCmd) Run(ctx context.Context, lib *library) error {
-	param := lib.param()
+func (c *policyDenyCmd) Run(ctx context.Context, lib *library.Library) error {
+	param := lib.Param()
 
 	return controller.InitializeDenyPolicyCommandController(ctx, param).
-		Deny(lib.logger, param, c.PolicyPath)
+		Deny(lib.Logger, param, c.PolicyPath)
 }
 
 // rootDirCmd is `root-dir`: the library's root, which the binary derives from
@@ -258,8 +240,8 @@ func (c *policyDenyCmd) Run(ctx context.Context, lib *library) error {
 type rootDirCmd struct{}
 
 // Run prints the library's root.
-func (*rootDirCmd) Run(lib *library) error {
-	fmt.Fprintln(lib.stdout, lib.root.AquaRoot())
+func (*rootDirCmd) Run(lib *library.Library) error {
+	fmt.Fprintln(lib.Stdout, lib.Root.AquaRoot())
 
 	return nil
 }

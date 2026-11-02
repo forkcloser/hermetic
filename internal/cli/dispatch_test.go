@@ -1,4 +1,4 @@
-package hermetic_test
+package cli_test
 
 import (
 	"bytes"
@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/forkcloser/hermetic/internal/hermetic"
+	"github.com/forkcloser/hermetic/internal/rootdir"
 )
 
 // TestDispatchPassesOverItsOwnLink holds a dispatch for a name no config has
@@ -63,7 +63,7 @@ func TestDispatchPassesOverTheRunningBinary(t *testing.T) {
 
 	link(t, rig.root, tool)
 
-	other := hermetic.Root(t.TempDir())
+	other := rootdir.Root(t.TempDir())
 	write(t, other.Binary(runtime.GOOS), "not the binary running\n")
 
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
@@ -71,7 +71,7 @@ func TestDispatchPassesOverTheRunningBinary(t *testing.T) {
 
 	run := exec.CommandContext(ctx, filepath.Join(rig.root.Bin(), exe(tool)))
 	run.Dir = rig.outside
-	run.Env = append(slices.Clone(rig.env), hermetic.RootEnv+"="+string(other))
+	run.Env = append(slices.Clone(rig.env), rootdir.Env+"="+string(other))
 
 	out, err := run.CombinedOutput()
 	if err != nil || strings.TrimSpace(string(out)) != "fake" {
@@ -132,7 +132,7 @@ func TestWhichFromARootWithoutABinary(t *testing.T) {
 	}
 
 	path := strings.Join([]string{system, "/bin", "/usr/bin"}, string(os.PathListSeparator))
-	env := append(os.Environ(), asBinary+"=1", hermetic.RootEnv+"="+t.TempDir(), "PATH="+path)
+	env := append(os.Environ(), asBinary+"=1", rootdir.Env+"="+t.TempDir(), "PATH="+path)
 
 	run := exec.CommandContext(t.Context(), binaryNamed(t), "which", tool)
 	run.Dir, run.Env = t.TempDir(), env
@@ -193,7 +193,7 @@ func exitStderr(err error) string {
 // the root's bin first, decoys, then a system directory holding a fake tool at
 // fake, that PATH alone, and a working directory outside any project.
 type linkedRig struct {
-	root    hermetic.Root
+	root    rootdir.Root
 	env     []string
 	path    string
 	outside string
@@ -208,7 +208,7 @@ func linkedRoot(t *testing.T) linkedRig {
 		t.Fatal(execErr)
 	}
 
-	root := hermetic.Root(t.TempDir())
+	root := rootdir.Root(t.TempDir())
 	if err := os.MkdirAll(root.Bin(), 0o750); err != nil {
 		t.Fatal(err)
 	}
@@ -254,7 +254,7 @@ func linkedRoot(t *testing.T) linkedRig {
 	// The PATH a shell has: the root's bin first, the decoys, then the system;
 	// sh for the script where the script needs it.
 	path := strings.Join(append(ahead, system, "/bin", "/usr/bin"), string(os.PathListSeparator))
-	env := append(os.Environ(), asBinary+"=1", hermetic.RootEnv+"="+string(root), "PATH="+path)
+	env := append(os.Environ(), asBinary+"=1", rootdir.Env+"="+string(root), "PATH="+path)
 
 	// Outside any project, as the scripts that met this ran: a project's policy
 	// would otherwise join the output with the gate's warning.
@@ -263,7 +263,7 @@ func linkedRoot(t *testing.T) linkedRig {
 
 // link places name in the root's bin as a link to the binary, the way the
 // mirror does: a symlink by name, a hard link on Windows.
-func link(t *testing.T, root hermetic.Root, name string) {
+func link(t *testing.T, root rootdir.Root, name string) {
 	t.Helper()
 
 	target := filepath.Join(root.Bin(), exe(name))
@@ -276,7 +276,7 @@ func link(t *testing.T, root hermetic.Root, name string) {
 		return
 	}
 
-	if err := os.Symlink(hermetic.Name, target); err != nil {
+	if err := os.Symlink(rootdir.Name, target); err != nil {
 		t.Fatal(err)
 	}
 }

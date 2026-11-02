@@ -3,11 +3,11 @@
 // of links to this very binary (docs/design.md).
 package main
 
-import "github.com/forkcloser/hermetic/internal/hermetic"
+import "github.com/forkcloser/hermetic/internal/cli"
 
 // version is stamped by the release build (-X main.version).
 var version = ""
 
 func main() {
-	hermetic.Main(version)
+	cli.Main(version)
 }

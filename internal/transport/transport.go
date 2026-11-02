@@ -1,4 +1,6 @@
-package hermetic
+// Package transport is the process's HTTP: every request the library makes,
+// its downloads and its GitHub API calls alike.
+package transport
 
 import (
 	"net/http"
@@ -17,14 +19,15 @@ const (
 	maxBackoff     = 30 * time.Second
 )
 
-// useTransporter makes the process's HTTP the toolset's: TLS 1.3 with
+// Install makes the process's HTTP the toolset's: TLS 1.3 with
 // post-quantum hybrid key exchange, and primordium's retry and backoff. The
 // library takes no client: every command it runs, its downloads and its
 // GitHub API calls alike, is handed http.DefaultClient (or builds on its
 // transport), so replacing that client is the one place to set it. Once per
 // process, before any request: SetDefaults panics on a second call, and a
-// client made earlier keeps Go's default TLS.
-func useTransporter() {
+// client made earlier keeps Go's default TLS. userAgent names the program
+// to the servers it calls.
+func Install(userAgent string) {
 	network.SetDefaults()
 
 	//nolint:reassign // the library is handed http.DefaultClient and takes no other.
@@ -32,6 +35,6 @@ func useTransporter() {
 		MaxRetries:     maxRetries,
 		InitialBackoff: initialBackoff,
 		MaxBackoff:     maxBackoff,
-		UserAgent:      Name,
+		UserAgent:      userAgent,
 	})
 }

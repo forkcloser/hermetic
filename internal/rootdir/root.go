@@ -1,14 +1,11 @@
-// Package hermetic wraps aqua, the library, into hermetic, the toolset's
-// own resolver: one root of ours from which aqua's three paths derive, a project
-// directory of our own, a dispatch on the name the binary was invoked under, and
-// a bin of links to the binary that mirrors what aqua exposes (docs/design.md).
-package hermetic
+// Package rootdir is the toolset's directory: where it is, and the paths aqua's
+// root, global config and policy derive from it (docs/design.md, "The root").
+package rootdir
 
 import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/mycophonic/primordium/filesystem"
 	"github.com/mycophonic/primordium/filesystem/dirs"
 )
 
@@ -17,31 +14,28 @@ const (
 	// target every link in the root's bin points at.
 	Name = "hermetic"
 
-	// RootEnv names the root; aqua's root, global config and policy derive from
+	// Env names the root; aqua's root, global config and policy derive from
 	// it, and the shell's values of those three are never consulted.
-	RootEnv = "HERMETIC_ROOT_DIR"
+	Env = "HERMETIC_ROOT_DIR"
 
 	windows = "windows"
-
-	// dirPerm is the mode of the directories the binary creates: the human's own.
-	dirPerm = filesystem.DirPermissionsPrivate
 )
 
 // Root is the toolset's directory.
 type Root string
 
-// RootFrom resolves the root: RootEnv when set, made absolute, else the
+// From resolves the root: Env when set, made absolute, else the
 // platform's data directory for the binary's name as primordium resolves it
 // ($XDG_DATA_HOME/hermetic or ~/.local/share/hermetic on Linux,
 // ~/Library/Application Support/hermetic on macOS,
 // %LOCALAPPDATA%\hermetic on Windows), created when missing.
-func RootFrom(getenv func(string) string) (Root, error) {
-	if r := getenv(RootEnv); r != "" {
+func From(getenv func(string) string) (Root, error) {
+	if r := getenv(Env); r != "" {
 		// Absolute: the three derived variables reach a dispatched tool, which
 		// would resolve a relative one against its own working directory.
 		abs, err := filepath.Abs(r)
 		if err != nil {
-			return "", fmt.Errorf("resolve %s: %w", RootEnv, err)
+			return "", fmt.Errorf("resolve %s: %w", Env, err)
 		}
 
 		return Root(abs), nil
@@ -73,10 +67,11 @@ func (r Root) Policy() string { return filepath.Join(string(r), "policy.yaml") }
 
 // Binary is where the binary lives, the target of every link in Bin.
 func (r Root) Binary(goos string) string {
-	return filepath.Join(r.Bin(), exeName(Name, goos))
+	return filepath.Join(r.Bin(), ExeName(Name, goos))
 }
 
-func exeName(name, goos string) string {
+// ExeName is a command's file name on the platform named: .exe on Windows.
+func ExeName(name, goos string) string {
 	if goos == windows {
 		return name + ".exe"
 	}

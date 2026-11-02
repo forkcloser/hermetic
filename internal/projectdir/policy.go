@@ -1,4 +1,4 @@
-package hermetic
+package projectdir
 
 import (
 	"errors"
@@ -11,6 +11,8 @@ import (
 
 	"github.com/aquaproj/aqua/v2/pkg/config"
 	"github.com/aquaproj/aqua/v2/pkg/policy"
+
+	"github.com/forkcloser/hermetic/internal/rootdir"
 )
 
 // RefusedPolicyError is the gate holding: the project's policy has no matching
@@ -25,10 +27,10 @@ type RefusedPolicyError struct {
 }
 
 func (e *RefusedPolicyError) Error() string {
-	return Name + " policy allow " + e.Policy
+	return rootdir.Name + " policy allow " + e.Policy
 }
 
-// ProjectPolicyPath is the gate. Everything AQUA_POLICY_CONFIG names is trusted
+// PolicyPath is the gate. Everything AQUA_POLICY_CONFIG names is trusted
 // on sight by the library, and only a policy its own finder locates is validated
 // against the record `policy allow` wrote; our walk replaces the finder, so the
 // validation is done here, with the library's validator. The project's policy
@@ -37,12 +39,12 @@ func (e *RefusedPolicyError) Error() string {
 // nothing to gate; otherwise the policy is refused, Denied when `policy deny`
 // recorded the human's choice. A cloned repository thus cannot allow a registry
 // of its choosing; `policy allow` is the one-time gate per machine.
-func ProjectPolicyPath(aquaRoot, projectDir string) (string, error) {
+func PolicyPath(aquaRoot, projectDir string) (string, error) {
 	if projectDir == "" {
 		return "", nil
 	}
 
-	policyPath, err := filepath.Abs(filepath.Join(projectDir, ProjectPolicy))
+	policyPath, err := filepath.Abs(filepath.Join(projectDir, Policy))
 	if err != nil {
 		return "", fmt.Errorf("resolve the project policy: %w", err)
 	}
@@ -73,7 +75,7 @@ func ProjectPolicyPath(aquaRoot, projectDir string) (string, error) {
 // underscore), as aqua keys it.
 func recordExists(aquaRoot, dir, policyPath string) bool {
 	name := policyPath
-	if runtime.GOOS == windows {
+	if runtime.GOOS == "windows" {
 		name = strings.ReplaceAll(policyPath, ":", "_")
 	}
 

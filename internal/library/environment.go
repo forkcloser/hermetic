@@ -1,4 +1,8 @@
-package hermetic
+// Package library is aqua, the library, as the binary runs it: the
+// environment it gets, the parameters derived from that environment, and the
+// controllers the commands and the dispatch call (docs/design.md, "It controls
+// the library's environment").
+package library
 
 import (
 	"errors"
@@ -9,6 +13,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/forkcloser/hermetic/internal/rootdir"
 )
 
 // The library's own variables that hermetic sets. Nothing named AQUA_* reaches
@@ -45,7 +51,7 @@ const (
 //
 //nolint:gochecknoglobals // immutable data.
 var known = map[string]bool{
-	RootEnv: true, ConfigEnv: true, NoGlobalConfigEnv: true, TokenEnv: true, LogLevelEnv: true,
+	rootdir.Env: true, ConfigEnv: true, NoGlobalConfigEnv: true, TokenEnv: true, LogLevelEnv: true,
 }
 
 // pinned are the library's knobs its settings file would otherwise decide,
@@ -76,9 +82,9 @@ const (
 	off = "false"
 )
 
-// defaultLogLevel is the library's own, set outright so the settings file's
+// DefaultLogLevel is the library's own, set outright so the settings file's
 // log level never applies.
-const defaultLogLevel = "info"
+const DefaultLogLevel = "info"
 
 // scrubbedPrefixes name what the library's run never inherits from the shell:
 // aqua's own variables, and everything cosign reads that steers trust (its
@@ -113,7 +119,7 @@ var (
 // file (`global_config` in ~/.config/aquaproj-aqua/config.yaml) fall through.
 func noGlobalConfig() string { return string(os.PathListSeparator) }
 
-// LibraryEnvironment is the environment the library runs in, for its own
+// Environment is the environment the library runs in, for its own
 // subcommands and for the resolution half of a dispatch: the shell's, minus
 // what is scrubbed (see scrubbedPrefixes), plus ours. aqua's three paths
 // derive from the root; the policies are the root's, when the root holds one,
@@ -121,8 +127,8 @@ func noGlobalConfig() string { return string(os.PathListSeparator) }
 // only from their HERMETIC_ counterparts; the verifiers' TUF cache lives in
 // the root. set holds what is set, unset what is removed; a HERMETIC_*
 // variable the binary does not know is an error.
-func LibraryEnvironment(
-	root Root,
+func Environment(
+	root rootdir.Root,
 	environ []string,
 	projectPolicy string,
 ) (set map[string]string, unset []string, err error) {
@@ -163,7 +169,7 @@ func LibraryEnvironment(
 	set[aquaGlobalConfigEnv] = global
 	set[aquaPolicyConfigEnv] = policyList(root, projectPolicy)
 	set[tufRootEnv] = filepath.Join(string(root), "sigstore")
-	set[aquaLogLevelEnv] = defaultLogLevel
+	set[aquaLogLevelEnv] = DefaultLogLevel
 
 	if v := ours[ConfigEnv]; v != "" {
 		set[aquaConfigEnv] = v
@@ -181,24 +187,6 @@ func LibraryEnvironment(
 	sort.Strings(unset)
 
 	return set, unset, nil
-}
-
-// ToolEnvironment is the environment a dispatched tool runs in: the shell's,
-// minus every AQUA_* variable. Nothing of ours is added: the toolset is reached
-// through hermetic, and a stock aqua under the tool is the human's own.
-func ToolEnvironment(environ []string) []string {
-	out := make([]string, 0, len(environ))
-
-	for _, entry := range environ {
-		key, _, _ := strings.Cut(entry, "=")
-		if strings.HasPrefix(key, aquaPrefix) {
-			continue
-		}
-
-		out = append(out, entry)
-	}
-
-	return out
 }
 
 func scrubbed(key string) bool {
@@ -221,7 +209,7 @@ func scrubbed(key string) bool {
 // runner's or a fresh session's, has no policy of its own, and the library
 // refuses a listed file that is not there; so the list is of what exists,
 // never of what a root should have.
-func policyList(root Root, projectPolicy string) string {
+func policyList(root rootdir.Root, projectPolicy string) string {
 	policies := make([]string, 0, 2)
 
 	if _, statErr := os.Stat(root.Policy()); statErr == nil {

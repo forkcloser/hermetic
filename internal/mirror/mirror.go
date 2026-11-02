@@ -1,4 +1,6 @@
-package hermetic
+// Package mirror keeps the root's bin: one link to the binary per command aqua
+// exposes (docs/design.md, "It keeps its own bin").
+package mirror
 
 import (
 	"errors"
@@ -6,9 +8,20 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+
+	"github.com/mycophonic/primordium/filesystem"
+
+	"github.com/forkcloser/hermetic/internal/rootdir"
 )
 
-// Mirror makes the root's bin expose exactly the commands aqua exposes in its
+const (
+	windows = "windows"
+
+	// dirPerm is the mode of the directories the mirror creates: the human's own.
+	dirPerm = filesystem.DirPermissionsPrivate
+)
+
+// Sync makes the root's bin expose exactly the commands aqua exposes in its
 // own bin, aqua itself excepted, each as a link to the binary: a symlink to the
 // binary's name beside it, a hard link on Windows. The mirror owns those names:
 // whatever sits under one that is not a link to the binary (a hard link left on
@@ -19,7 +32,7 @@ import (
 //
 // `aqua` is excepted because `update-aqua` places upstream's binary under that
 // name in aqua's bin; a mirrored `aqua` would dispatch `exec -- aqua` to it.
-func Mirror(root Root, goos string) error {
+func Sync(root rootdir.Root, goos string) error {
 	binary := root.Binary(goos)
 	if _, err := os.Stat(binary); err != nil {
 		return fmt.Errorf("the binary the links point at: %w", err)
@@ -173,7 +186,7 @@ func exposed(aquaRoot, goos string) (map[string]bool, error) {
 
 	for _, entry := range entries {
 		name := entry.Name()
-		if name == exeName("aqua", goos) || name == exeName(Name, goos) {
+		if name == rootdir.ExeName("aqua", goos) || name == rootdir.ExeName(rootdir.Name, goos) {
 			continue
 		}
 

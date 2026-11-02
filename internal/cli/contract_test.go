@@ -1,4 +1,4 @@
-package hermetic_test
+package cli_test
 
 import (
 	"errors"
@@ -11,7 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/forkcloser/hermetic/internal/hermetic"
+	"github.com/forkcloser/hermetic/internal/projectdir"
+	"github.com/forkcloser/hermetic/internal/rootdir"
 )
 
 // The binary's contract at the process boundary, as docs/design.md states
@@ -56,7 +57,7 @@ func TestEnvironmentAtTheBinary(t *testing.T) {
 	// filesystem, and a temporary directory may sit behind a symlink.
 	outside := canonical(t, t.TempDir())
 
-	base := append(os.Environ(), asBinary+"=1", hermetic.RootEnv+"="+root)
+	base := append(os.Environ(), asBinary+"=1", rootdir.Env+"="+root)
 
 	cases := []struct {
 		name   string
@@ -93,7 +94,7 @@ func TestEnvironmentAtTheBinary(t *testing.T) {
 		},
 		{
 			name: "the root follows HERMETIC_ROOT_DIR, made absolute",
-			env:  []string{hermetic.RootEnv + "=rel"}, args: []string{"root-dir"},
+			env:  []string{rootdir.Env + "=rel"}, args: []string{"root-dir"},
 			status: 0, stdout: filepath.Join(outside, "rel", "store"),
 		},
 		{
@@ -195,11 +196,11 @@ func TestPolicyRecordsAtTheBinary(t *testing.T) {
 	root := t.TempDir()
 	// Canonical: the record is keyed by the path the child resolves.
 	project := filepath.Join(canonical(t, t.TempDir()), "repo")
-	policy := filepath.Join(project, hermetic.ProjectDir, hermetic.ProjectPolicy)
-	write(t, filepath.Join(project, hermetic.ProjectDir, hermetic.ProjectConfig), "packages: []\n")
+	policy := filepath.Join(project, projectdir.Dir, projectdir.Policy)
+	write(t, filepath.Join(project, projectdir.Dir, projectdir.Config), "packages: []\n")
 	write(t, policy, "registries:\n  - type: standard\n")
 
-	env := append(os.Environ(), asBinary+"=1", hermetic.RootEnv+"="+root)
+	env := append(os.Environ(), asBinary+"=1", rootdir.Env+"="+root)
 	record := filepath.Join(root, "store", "policies", strings.ReplaceAll(policy, ":", "_"))
 	denied := filepath.Join(root, "store", "policy-warnings", strings.ReplaceAll(policy, ":", "_"))
 	allow := "hermetic policy allow " + policy + "\n"
@@ -229,7 +230,7 @@ func TestPolicyRecordsAtTheBinary(t *testing.T) {
 	if out := run(
 		"policy",
 		"allow",
-		filepath.Join(hermetic.ProjectDir, hermetic.ProjectPolicy),
+		filepath.Join(projectdir.Dir, projectdir.Policy),
 	); strings.Contains(
 		out,
 		"policy allow",
@@ -252,7 +253,7 @@ func TestPolicyRecordsAtTheBinary(t *testing.T) {
 	if out := run(
 		"policy",
 		"deny",
-		filepath.Join(hermetic.ProjectDir, hermetic.ProjectPolicy),
+		filepath.Join(projectdir.Dir, projectdir.Policy),
 	); strings.Contains(
 		out,
 		"policy allow",
@@ -300,7 +301,7 @@ func TestDispatchedToolEnvironmentAtTheBinary(t *testing.T) {
 		t.Fatal(execErr)
 	}
 
-	root := hermetic.Root(t.TempDir())
+	root := rootdir.Root(t.TempDir())
 	if err := os.MkdirAll(root.Bin(), 0o750); err != nil {
 		t.Fatal(err)
 	}
@@ -320,7 +321,7 @@ func TestDispatchedToolEnvironmentAtTheBinary(t *testing.T) {
 
 	path := strings.Join([]string{root.Bin(), system, "/bin", "/usr/bin"}, string(os.PathListSeparator))
 	env := append(os.Environ(),
-		asBinary+"=1", hermetic.RootEnv+"="+string(root), "PATH="+path,
+		asBinary+"=1", rootdir.Env+"="+string(root), "PATH="+path,
 		"AQUA_ROOT_DIR=/theirs", "AQUA_GLOBAL_CONFIG=/theirs.yaml", "AQUA_SOMETHING=x",
 		"COSIGN_PASSWORD=kept", "GITHUB_TOKEN=kept", "TUF_ROOT=/kept", "GH_TOKEN=kept",
 		"HERMETIC_GITHUB_TOKEN=ours",
