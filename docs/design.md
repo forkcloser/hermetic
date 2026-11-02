@@ -80,7 +80,9 @@ first use, as `which` does, under the library's environment (below); then the
 mirror; then the tool itself, with the shell's environment minus every `AQUA_*`,
 replacing the process on Unix, as a child whose exit code becomes ours on Windows.
 A name no config provides, by the walk or named, is looked up past hermetic's own
-links, every PATH entry that resolves to the binary, to the next entry on the
+links, every PATH entry that resolves to the binary running or to the root's
+binary (two files when `HERMETIC_ROOT_DIR` names a root the link's binary is not
+in; passing over the root's alone ran the link again, forever), to the next entry on the
 PATH, the system's tool, as the recipes' PATH already orders it, the root's bin then
 the base system; it is refused only when nothing remains. `which` answers the same
 path, so a script's `$(hermetic which <tool>)` names what a dispatch runs, never
