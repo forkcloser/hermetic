@@ -99,6 +99,55 @@ func TestFindProjectNearestWins(t *testing.T) {
 	}
 }
 
+// The walk stops at the repository boundary: a repository, or a worktree whose
+// .git is a file, with no manifest of its own has no project, whatever encloses
+// it; a plain directory inside a repository is the repository's.
+func TestFindProjectStopsAtTheRepository(t *testing.T) {
+	t.Parallel()
+
+	top := t.TempDir()
+	outer := filepath.Join(top, "outer")
+	write(t, filepath.Join(outer, projectdir.Dir, projectdir.Config), "packages: []\n")
+	write(t, filepath.Join(outer, ".git", "HEAD"), "ref: refs/heads/main\n")
+
+	nested := filepath.Join(outer, "vendor", "nested")
+	write(t, filepath.Join(nested, ".git", "HEAD"), "ref: refs/heads/main\n")
+
+	worktree := filepath.Join(outer, ".claude", "worktrees", "wt")
+	write(t, filepath.Join(worktree, ".git"), "gitdir: "+filepath.Join(outer, ".git", "worktrees", "wt")+"\n")
+
+	owned := filepath.Join(outer, "vendor", "owned")
+	write(t, filepath.Join(owned, ".git"), "gitdir: elsewhere\n")
+	write(t, filepath.Join(owned, projectdir.Dir, projectdir.Config), "packages: []\n")
+
+	plain := filepath.Join(outer, "src", "pkg")
+	if err := os.MkdirAll(plain, 0o750); err != nil {
+		t.Fatal(err)
+	}
+
+	cases := map[string]string{
+		outer:                         filepath.Join(outer, projectdir.Dir),
+		plain:                         filepath.Join(outer, projectdir.Dir),
+		nested:                        "",
+		filepath.Join(nested, "deep"): "",
+		worktree:                      "",
+		owned:                         filepath.Join(owned, projectdir.Dir),
+	}
+
+	for wd, want := range cases {
+		got, err := projectdir.Find(wd)
+		if err != nil {
+			t.Errorf("%s: %v", wd, err)
+
+			continue
+		}
+
+		if got != want {
+			t.Errorf("Find(%s) = %q, want %q", wd, got, want)
+		}
+	}
+}
+
 func TestProjectPolicyPath(t *testing.T) {
 	t.Parallel()
 

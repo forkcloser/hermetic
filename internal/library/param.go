@@ -1,7 +1,9 @@
 package library
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 
@@ -38,12 +40,16 @@ func newParam(
 		LogLevel:               opts.LogLevel,
 		RootDir:                root.AquaRoot(),
 		MaxParallelism:         config.GetMaxParallelism("", 0, log),
-		PolicyConfigFilePaths:  policies(root, projectPolicy),
 		Checksum:               true,
 		RequireChecksum:        true,
 		EnforceChecksum:        true,
 		EnforceRequireChecksum: true,
 		DisableTracking:        true,
+	}
+
+	param.PolicyConfigFilePaths, err = policies(root, projectPolicy)
+	if err != nil {
+		return nil, err
 	}
 
 	if !opts.NoGlobalConfig {
@@ -57,17 +63,21 @@ func newParam(
 // toolset's own, when the root holds one, then the project's when one passed
 // the gate. A root with no toolset in it, a runner's or a fresh session's, has
 // no policy of its own, and the library refuses a listed file that is not
-// there; so the list is of what exists, never of what a root should have.
-func policies(root rootdir.Root, projectPolicy string) []string {
+// there; so the list is of what exists, never of what a root should have. A
+// root policy that cannot be looked for is an error, never an absence.
+func policies(root rootdir.Root, projectPolicy string) ([]string, error) {
 	var paths []string
 
-	if _, err := os.Stat(root.Policy()); err == nil {
+	switch _, err := os.Stat(root.Policy()); {
+	case err == nil:
 		paths = append(paths, root.Policy())
+	case !errors.Is(err, fs.ErrNotExist):
+		return nil, fmt.Errorf("look for the root policy: %w", err)
 	}
 
 	if projectPolicy != "" {
 		paths = append(paths, projectPolicy)
 	}
 
-	return paths
+	return paths, nil
 }

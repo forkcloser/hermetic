@@ -3,6 +3,7 @@ package library_test
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"testing"
 
@@ -172,6 +173,24 @@ func TestNew(t *testing.T) {
 
 		if paths := lib.Param().PolicyConfigFilePaths; !slices.Equal(paths, []string{root.Policy()}) {
 			t.Errorf("policies = %q, want the root's", paths)
+		}
+	})
+
+	t.Run("a root policy that cannot be looked for", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("Windows reports a path through a file as absent, not as an error")
+		}
+		// A root that is a file: the policy beside it can be neither found nor
+		// ruled out, which is an error, never an absence.
+		root := filepath.Join(t.TempDir(), "root")
+		if err := os.WriteFile(root, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		t.Chdir(t.TempDir())
+
+		if _, err := library.New(t.Context(), library.Options{RootDir: root, LogLevel: "info"}); err == nil {
+			t.Fatal("New accepted a root whose policy it could not look for")
 		}
 	})
 
