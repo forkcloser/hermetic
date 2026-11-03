@@ -8,8 +8,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-
-	"github.com/forkcloser/hermetic/internal/rootdir"
 )
 
 // ErrNoPath is a name nothing answers: no config pins it, and the PATH holds
@@ -20,18 +18,18 @@ var ErrNoPath = errors.New("the library resolved no path for the tool")
 // config has, the library falls back to the PATH, and the first hit there is a
 // link to this binary, the root's own, since the library skips only its own
 // proxy: that hit is passed over for the next entry on the PATH that is
-// neither the binary running nor the root's binary, which is what a script
+// neither the binary running nor self, the root's binary, which is what a script
 // that runs outside any project, an autotools build in a scratch directory,
 // gets from the system; only when nothing remains is the name refused, rather
 // than dispatching itself forever. The binary running is a self in its own
 // right: a link to it runs under a root whose binary is another file when
 // HERMETIC_ROOT_DIR says so. Any other answer stands, installed yet or not.
-func PastLink(root rootdir.Root, path, tool string) (string, error) {
+func PastLink(self, path, tool string) (string, error) {
 	if path == "" {
 		return "", fmt.Errorf("%w: %s", ErrNoPath, tool)
 	}
 
-	selves, err := selves(root)
+	selves, err := selves(self)
 	if err != nil {
 		return "", err
 	}
@@ -48,21 +46,21 @@ func PastLink(root rootdir.Root, path, tool string) (string, error) {
 }
 
 // selves is every file a PATH entry must not resolve to: the binary running,
-// and the root's binary when the root holds one.
-func selves(root rootdir.Root) ([]os.FileInfo, error) {
-	self, err := os.Executable()
+// and self, the root's binary, when the root holds one.
+func selves(self string) ([]os.FileInfo, error) {
+	executable, err := os.Executable()
 	if err != nil {
 		return nil, fmt.Errorf("the binary running: %w", err)
 	}
 
-	running, err := os.Stat(self)
+	running, err := os.Stat(executable)
 	if err != nil {
 		return nil, fmt.Errorf("the binary running: %w", err)
 	}
 
 	files := []os.FileInfo{running}
 
-	binary, err := os.Stat(root.Binary(runtime.GOOS))
+	binary, err := os.Stat(self)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return files, nil

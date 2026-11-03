@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -20,13 +19,12 @@ import (
 	"github.com/forkcloser/hermetic/internal/rootdir"
 )
 
-// Library is what a command runs the library with: its logger and runtime, the
-// parameters the binary derived for it, and the stream a command answers on.
+// Library is what a command runs the library with: its logger and runtime,
+// the root, and the parameters the binary derived for it.
 type Library struct {
 	Logger  *slog.Logger
 	Root    rootdir.Root
 	Runtime *aquaruntime.Runtime
-	Stdout  io.Writer
 
 	base *config.Param
 }
@@ -39,35 +37,29 @@ func (lib *Library) Param() *config.Param {
 	return &param
 }
 
-// New is the library as a command runs it: the root, the environment applied
-// to the process, which the verifiers the library runs inherit, the project
-// walk and its gate, and the parameters derived from that environment.
-// configFlag is the config the command names; keepsGate is a policy
-// subcommand's, which runs without the gate it keeps.
-func New(
-	ctx context.Context,
-	log *slog.Logger,
-	getenv func(string) string,
-	stdout io.Writer,
-	version, configFlag string,
-	keepsGate bool,
-	level string,
-) (*Library, error) {
-	root, err := rootdir.From(getenv)
+// New is the library as a command runs it: the root, the project the run
+// names or walks to and its gate, the environment its verifiers inherit,
+// applied to the process, and the parameters. It logs through slog's default
+// logger.
+func New(ctx context.Context, opts Options) (*Library, error) {
+	root, err := rootdir.From(opts.RootDir)
 	if err != nil {
 		return nil, err
 	}
 
-	set, unset, err := projectEnvironment(root, configFlag, keepsGate, os.Environ())
+	configPath, projectPolicy, err := project(root, opts.Config, opts.KeepsGate)
 	if err != nil {
 		return nil, err
 	}
 
-	if applyErr := apply(set, unset); applyErr != nil {
-		return nil, applyErr
+	err = setEnvironment(root, opts.Token, os.Environ())
+	if err != nil {
+		return nil, err
 	}
 
-	base, err := libraryParam(log, root, set, version, configFlag, level)
+	log := slog.Default()
+
+	base, err := newParam(log, root, opts, configPath, projectPolicy)
 	if err != nil {
 		return nil, err
 	}
@@ -76,7 +68,6 @@ func New(
 		Logger:  log,
 		Root:    root,
 		Runtime: aquaruntime.New(ctx),
-		Stdout:  stdout,
 		base:    base,
 	}, nil
 }
@@ -98,16 +89,16 @@ func (lib *Library) Which(ctx context.Context, param *config.Param, tool string)
 	return found, nil
 }
 
-// Resolve finds the tool a dispatch runs: which for the path, past the root's
-// own link, then install for the package when it is not there yet, the
-// first-use install a links-only root relies on.
-func (lib *Library) Resolve(ctx context.Context, tool string) (string, error) {
+// Resolve finds the tool a dispatch runs: which for the path, past the links
+// to self, the root's binary (dispatch.PastLink), then install for the package
+// when it is not there yet, the first-use install a links-only root relies on.
+func (lib *Library) Resolve(ctx context.Context, tool, self string) (string, error) {
 	found, err := lib.Which(ctx, lib.Param(), tool)
 	if err != nil {
 		return "", fmt.Errorf("%s: %w", tool, err)
 	}
 
-	path, err := dispatch.PastLink(lib.Root, found.ExePath, tool)
+	path, err := dispatch.PastLink(self, found.ExePath, tool)
 	if err != nil {
 		return "", err
 	}
@@ -138,86 +129,45 @@ func (lib *Library) Resolve(ctx context.Context, tool string) (string, error) {
 	return path, nil
 }
 
-// apply sets and unsets the process environment for the library.
-func apply(set map[string]string, unset []string) error {
-	for _, key := range unset {
-		if err := os.Unsetenv(key); err != nil {
-			return fmt.Errorf("unset %s: %w", key, err)
-		}
-	}
-
-	for key, value := range set {
-		if err := os.Setenv(key, value); err != nil {
-			return fmt.Errorf("set %s: %w", key, err)
-		}
-	}
-
-	return nil
-}
-
-// projectEnvironment is what the library's run sets and unsets, and AQUA_CONFIG with
-// the project's policy when it passes the gate. The project is the one the
-// run names (configFlag: -c, or HERMETIC_CONFIG, already in set), whose
-// directory holds its policy as a walked one does, so a named config carries
-// its project and a job that names the checkout's manifest resolves from any
-// working directory as it would from the checkout; a manifest with no policy
-// beside it, a scratch copy, has none to carry. Without a named config the
-// project is the walk's, upward from the working directory. The policy
-// subcommands are the gate's own keepers (keepsGate): `policy allow` must not
-// warn about the record it is about to write.
-func projectEnvironment(
-	root rootdir.Root,
-	configFlag string,
-	keepsGate bool,
-	environ []string,
-) (map[string]string, []string, error) {
-	set, unset, err := Environment(root, environ, "")
-	if err != nil {
-		return nil, nil, err
-	}
-
-	named := configFlag
-	if named == "" {
-		named = set[aquaConfigEnv]
-	}
-
+// project is the config a run reads and the project policy that joins the
+// root's, once it passed the gate. The project is the one the run names
+// (named: -c or HERMETIC_CONFIG), whose directory holds its policy as a walked
+// one does, so a named config carries its project and a job that names the
+// checkout's manifest resolves from any working directory as it would from the
+// checkout; a manifest with no policy beside it, a scratch copy, has none to
+// carry. Without a named config the project is the walk's, upward from the
+// working directory. The policy subcommands are the gate's own keepers
+// (keepsGate): `policy allow` must not be refused the record it is about to
+// write.
+func project(root rootdir.Root, named string, keepsGate bool) (configPath, policy string, err error) {
 	if named != "" && isRootManifest(named, root) {
-		return set, unset, nil
+		return named, "", nil
 	}
 
 	projectDir, err := projectOf(named)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	if projectDir == "" {
-		return set, unset, nil
+	if err != nil || projectDir == "" {
+		return named, "", err
 	}
 
 	if !keepsGate {
-		policyPath, err := projectdir.PolicyPath(root.AquaRoot(), projectDir)
+		policy, err = projectdir.PolicyPath(root.AquaRoot(), projectDir)
 		// Denied by the walk: the repository's config is ignored and the
 		// root's pins answer. Denied but named outright, the refusal stands:
 		// naming the config asks for it.
 		if refused, ok := errors.AsType[*projectdir.RefusedPolicyError](err); ok && refused.Denied && named == "" {
-			return set, unset, nil
+			return "", "", nil
 		}
 
 		if err != nil {
-			return nil, nil, err
-		}
-
-		set, unset, err = Environment(root, environ, policyPath)
-		if err != nil {
-			return nil, nil, err
+			return "", "", err
 		}
 	}
 
 	if named == "" {
-		set[aquaConfigEnv] = projectDir + string(os.PathSeparator) + projectdir.Config
+		return filepath.Join(projectDir, projectdir.Config), policy, nil
 	}
 
-	return set, unset, nil
+	return named, policy, nil
 }
 
 // isRootManifest reports whether the named config is the root's own manifest,

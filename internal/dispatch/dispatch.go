@@ -4,18 +4,14 @@
 // argv[0]").
 package dispatch
 
-import (
-	"strings"
-
-	"github.com/forkcloser/hermetic/internal/rootdir"
-)
+import "strings"
 
 const windows = "windows"
 
-// Target tells whether the binary was invoked under another name, through
-// a link in the root's bin: then that name is the tool to run, with the rest
-// of the arguments. Under its own name the binary is aqua, and tool is "".
-func Target(args []string, goos string) (tool string, toolArgs []string) {
+// Target tells whether the binary, named self, was invoked under another name,
+// through a link in the root's bin: then that name is the tool to run, with the
+// rest of the arguments. Under its own name the binary is aqua, and tool is "".
+func Target(args []string, self, goos string) (tool string, toolArgs []string) {
 	if len(args) == 0 {
 		return "", nil
 	}
@@ -23,12 +19,12 @@ func Target(args []string, goos string) (tool string, toolArgs []string) {
 	name := baseName(args[0], goos)
 	if goos == windows {
 		name = trimExe(name)
-		if strings.EqualFold(name, rootdir.Name) {
+		if strings.EqualFold(name, self) {
 			return "", nil
 		}
 	}
 
-	if name == rootdir.Name {
+	if name == self {
 		return "", nil
 	}
 

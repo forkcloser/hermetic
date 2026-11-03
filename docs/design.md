@@ -51,10 +51,11 @@ The command line is kong, the logger slog through primordium's, and the exit
 status primordium's shutdown, as every CLI of ours: aqua's own command layer,
 urfave and its helpers, is not linked, since each of its commands is a few lines
 of flag reading over a controller that takes a plain logger and a parameter
-struct, and those lines are ours. The parameter struct is derived from the
-environment the binary sets for the library (below) and from nothing else: the
-library's settings file is never read, since every value it could supply is
-pinned there.
+struct, and those lines are ours. The binary sets every field of the parameter
+struct itself: aqua's command layer is also the only reader of its settings file and
+of most `AQUA_*` variables, so with it unlinked neither reaches the library
+(verified against aqua v2.65.2: its library packages read `AQUA_GITHUB_TOKEN`, and
+`AQUA_GOOS`, `AQUA_GOARCH`, `AQUA_LIBC`, and nothing else of the kind).
 
 **It exposes what the toolset uses, and nothing else.** The grammar names the
 library's commands the toolset calls, each with the flags it keeps: `install`
@@ -100,10 +101,10 @@ what is scrubbed, plus ours, and nothing else. Scrubbed: every `AQUA_*`; everyth
 cosign reads that steers trust, `TUF_*`, `SIGSTORE_*`, `COSIGN_*`; the CI and
 cloud identities it reads, `ACTIONS_ID_TOKEN_REQUEST_*`, `GITLAB_*`,
 `BUILDKITE_*`, `SPIFFE_ENDPOINT_SOCKET`, `GOOGLE_SERVICE_ACCOUNT_NAME`,
-`GITHUB_HOST`; and `GITHUB_TOKEN`. Ours: `AQUA_ROOT_DIR`, `AQUA_GLOBAL_CONFIG` and
-`AQUA_POLICY_CONFIG` from the root, `TUF_ROOT` as `<root>/sigstore` so the verifiers'
-trust cache lives in the root, and the five variables the binary exposes, the only
-`HERMETIC_*` it reads:
+`GITHUB_HOST`; and `GITHUB_TOKEN`. Ours: `TUF_ROOT` as `<root>/sigstore` so the
+verifiers' trust cache lives in the root, and the token below. The rest of a run is
+the parameter struct's: aqua's root, the global config and the policies from the
+root, and the five variables the binary exposes, the only `HERMETIC_*` it reads:
 
 - `HERMETIC_ROOT_DIR`: the root.
 - `HERMETIC_CONFIG`: the project config, outright, like `-c`.
@@ -114,15 +115,12 @@ trust cache lives in the root, and the five variables the binary exposes, the on
 
 Any other `HERMETIC_*` in the environment is refused, named, so a misspelling or a
 knob the binary does not expose fails loud. Nothing switches the gate or a verifier
-off: the library's `DISABLE_*` and checksum knobs have no counterpart. aqua reads
-one more input, its settings file at
-`${XDG_CONFIG_HOME:-~/.config}/aquaproj-aqua/config.yaml`, for the three paths and
-for its remaining knobs, each applying when the matching variable is empty. The
-binary leaves none empty: the three paths always, and the knobs pinned to the one
-value the toolset runs with, the policy gate and the lazy install on, checksums
-verified and required whatever a config says, the vacuum's use tracking off, no
-progress bar, the library's defaults for parallelism, log level and colour. That
-file never reaches the toolset and stays the human's. `HOME` stays the shell's:
+off: the library's `DISABLE_*` and checksum knobs have no counterpart, and the
+binary sets each to the one value the toolset runs with, the policy gate and the
+lazy install on, checksums verified and required whatever a config says, the
+vacuum's use tracking off, no progress bar, the library's default parallelism. The
+settings file at `${XDG_CONFIG_HOME:-~/.config}/aquaproj-aqua/config.yaml` never
+reaches the toolset and stays the human's. `HOME` stays the shell's:
 slsa-verifier caches under it, and the recipes that point it elsewhere for a
 session keep doing so.
 
@@ -247,13 +245,10 @@ The project files are `.hermetic/`'s (above); the canonical `.limen/aqua.yaml` t
 import keeps its name.
 
 One recipe case needs a switch of ours. `tools.just` runs aqua on a project's own
-pins alone, today by `env -u AQUA_GLOBAL_CONFIG`, which the binary's derivation would
-undo. `HERMETIC_NO_GLOBAL_CONFIG=true` tells the binary to set
-`AQUA_GLOBAL_CONFIG` to a value that names no file, a lone list separator, which
-aqua's parser skips as empty entries; not to leave it empty, since an empty variable
-lets the human's settings file's `global_config` fall through. The recipe sets it
-where it unset the variable, and `HERMETIC_GITHUB_TOKEN` where it set
-`AQUA_GITHUB_TOKEN`.
+pins alone, today by `env -u AQUA_GLOBAL_CONFIG`, which the binary ignores like every
+`AQUA_*`. `HERMETIC_NO_GLOBAL_CONFIG=true` tells the binary to list no global config.
+The recipe sets it where it unset the variable, and `HERMETIC_GITHUB_TOKEN` where it
+set `AQUA_GITHUB_TOKEN`.
 
 ## CI
 

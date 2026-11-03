@@ -9,57 +9,85 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"runtime"
 	"runtime/debug"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/alecthomas/kong"
 	"github.com/aquaproj/aqua/v2/pkg/config"
 	applogger "github.com/mycophonic/primordium/app/logger"
 	"github.com/mycophonic/primordium/app/shutdown"
+	"github.com/mycophonic/primordium/filesystem/dirs"
+	"github.com/mycophonic/primordium/network"
+	"github.com/mycophonic/primordium/network/transporter"
 
 	"github.com/forkcloser/hermetic/internal/dispatch"
 	"github.com/forkcloser/hermetic/internal/library"
 	"github.com/forkcloser/hermetic/internal/mirror"
 	"github.com/forkcloser/hermetic/internal/projectdir"
-	"github.com/forkcloser/hermetic/internal/rootdir"
-	"github.com/forkcloser/hermetic/internal/transport"
 )
 
-// Env is one invocation's view of its process: the version it reports, its
-// streams, its environment and its arguments, argv[0] first. A test runs the
-// binary through one without owning the process.
+// Env is one invocation of the binary: the name it answers to and the version
+// it reports, its streams, and its arguments, argv[0] first. The environment is
+// the process's. A test runs the binary through one without owning its streams.
 type Env struct {
+	Name    string
 	Version string
 	Stdout  io.Writer
 	Stderr  io.Writer
-	Getenv  func(string) string
 	Args    []string
 }
 
-const description = "The toolset's own aqua: the library's commands under one root of its own, and the tools it installs, by name"
+const (
+	description = "The toolset's own aqua: the library's commands under one root of its own, and the tools it installs, by name"
 
-var (
-	errNotManaged = errors.New("the command is not managed by the library, so it has no version")
-	errNotLevel   = errors.New(library.LogLevelEnv + " is not a log level (debug, info, warn, error)")
+	// defaultLogLevel is the --log-level flag's default, and a dispatch's.
+	defaultLogLevel = "info"
 )
 
-// Main runs the binary as a process: Run under a context primordium's shutdown
-// cancels on a signal, then the exit status Run asked for, 0 on nil, 1 with the
-// error logged on anything else. It never returns.
-func Main(version string) {
-	transport.Install(rootdir.Name)
+// The library's own GitHub client wraps the process's client in a retrying one
+// of its own (retryablehttp, four retries), so this policy stays short: the two
+// multiply on a GitHub API call.
+const (
+	maxRetries     = 3
+	initialBackoff = time.Second
+	maxBackoff     = 30 * time.Second
+)
+
+var errNotManaged = errors.New("the command is not managed by the library, so it has no version")
+
+// Main runs the binary as a process. It sets what is the process's once, before
+// anything reads it: the application name primordium's dirs resolves the
+// default root under, and the HTTP client, TLS 1.3 with post-quantum hybrid
+// key exchange and primordium's retry and backoff, which the library is handed
+// for every request it makes (it takes no client of its own). Then Run, under a
+// context primordium's shutdown cancels on a signal, and the exit status Run
+// asked for: 0 on nil, 1 with the error logged on anything else. It never
+// returns.
+func Main(name, version string) {
+	dirs.SetAppName(name)
+	network.SetDefaults()
+
+	//nolint:reassign // the library is handed http.DefaultClient and takes no other.
+	http.DefaultClient = transporter.NewClient(transporter.Options{
+		MaxRetries:     maxRetries,
+		InitialBackoff: initialBackoff,
+		MaxBackoff:     maxBackoff,
+		UserAgent:      name,
+	})
 
 	ctx := shutdown.SetDefaults(context.Background())
 
 	shutdown.Run(ctx, func(ctx context.Context) error {
 		return Run(ctx, &Env{
+			Name:    name,
 			Version: versionOf(version),
 			Stdout:  os.Stdout,
 			Stderr:  os.Stderr,
-			Getenv:  os.Getenv,
 			Args:    os.Args,
 		})
 	})
@@ -81,78 +109,97 @@ func versionOf(stamped string) string {
 
 // Run is one invocation of the binary. Under its own name the binary parses
 // its grammar and runs the command named; under any other name, through a
-// link, it resolves that tool through the library and runs it itself. The
-// library, with the root, the environment, the project walk and its gate, is
-// made when a command asks for it: a version, a usage or a usage error asks
-// for none, so each answers where the root cannot be made.
+// link, it resolves that tool through the library and runs it itself.
 func Run(ctx context.Context, env *Env) error {
-	tool, toolArgs := dispatch.Target(env.Args, runtime.GOOS)
-
-	var (
-		cli  grammar
-		kctx *kong.Context
-		err  error
-	)
-
-	level := env.Getenv(library.LogLevelEnv)
-
+	tool, toolArgs := dispatch.Target(env.Args, env.Name, runtime.GOOS)
 	if tool == "" {
-		kctx, err = parse(ctx, &cli, env)
-		if err != nil || kctx == nil {
-			return err
-		}
-
-		level = cli.LogLevel
+		return command(ctx, env)
 	}
+	// The shell's own environment, kept for the tool: the library's run scrubs
+	// and sets the process's.
+	shell := os.Environ()
 
-	if level == "" {
-		level = library.DefaultLogLevel
-	}
-
-	slogLevel, err := levelOf(level)
+	opts, err := library.ReadOptions(shell)
 	if err != nil {
 		return err
 	}
-	// The process-wide handler, the library's logger included: the level is
-	// the flag's or HERMETIC_LOG_LEVEL's, never the LOG_LEVEL the handler would
-	// read on its own.
-	applogger.SetDefaultsForLogger(ctx, slogLevel)
 
-	log := slog.Default()
-
-	if tool == "" {
-		keepsGate := strings.HasPrefix(kctx.Command(), "policy")
-
-		bindErr := kctx.BindToProvider(func() (*library.Library, error) {
-			return library.New(ctx, log, env.Getenv, env.Stdout, env.Version, cli.Config, keepsGate, level)
-		})
-		if bindErr != nil {
-			return fmt.Errorf("bind the library: %w", bindErr)
-		}
-
-		if runErr := kctx.Run(); runErr != nil {
-			return refusal(env, fmt.Errorf("%s: %w", kctx.Command(), runErr))
-		}
-
-		return nil
+	if opts.LogLevel == "" {
+		opts.LogLevel = defaultLogLevel
 	}
-	// The shell's own environment, kept for the tool a dispatch runs: the
-	// library's run scrubs and sets the process's.
-	shell := os.Environ()
 
-	lib, err := library.New(ctx, log, env.Getenv, env.Stdout, env.Version, "", false, level)
+	setLogging(ctx, opts.LogLevel)
+
+	opts.Version = env.Version
+
+	lib, err := library.New(ctx, opts)
 	if err != nil {
 		return refusal(env, err)
 	}
 
-	path, err := lib.Resolve(ctx, tool)
+	self := lib.Root.Binary(env.Name, runtime.GOOS)
+
+	path, err := lib.Resolve(ctx, tool, self)
 	if err != nil {
 		return err
 	}
 
-	syncBin(ctx, log, lib.Root)
+	syncBin(ctx, lib, self)
 
 	return dispatch.Exec(ctx, path, tool, toolArgs, dispatch.Environment(shell))
+}
+
+// command runs the command the arguments name. The library, with the root, the
+// environment, the project walk and its gate, is made when the command asks for
+// it: a version, a usage or a usage error asks for none, so each answers where
+// the root cannot be made.
+func command(ctx context.Context, env *Env) error {
+	var cli grammar
+
+	kctx, err := parse(ctx, &cli, env)
+	if err != nil || kctx == nil {
+		return err
+	}
+
+	setLogging(ctx, cli.LogLevel)
+
+	bindErr := kctx.BindToProvider(func() (*library.Library, error) {
+		opts, err := library.ReadOptions(os.Environ())
+		if err != nil {
+			return nil, err
+		}
+
+		if cli.Config != "" {
+			opts.Config = cli.Config
+		}
+
+		opts.LogLevel = cli.LogLevel
+		opts.Version = env.Version
+		opts.KeepsGate = strings.HasPrefix(kctx.Command(), "policy")
+
+		return library.New(ctx, opts)
+	})
+	if bindErr != nil {
+		return fmt.Errorf("bind the library: %w", bindErr)
+	}
+
+	if err := kctx.Run(); err != nil {
+		return refusal(env, fmt.Errorf("%s: %w", kctx.Command(), err))
+	}
+
+	return nil
+}
+
+// setLogging installs the process-wide handler, the library's logger included,
+// at level, which ReadOptions or kong has validated: the flag's or
+// HERMETIC_LOG_LEVEL's, never the LOG_LEVEL the handler would read on its own.
+func setLogging(ctx context.Context, level string) {
+	var slogLevel slog.Level
+	if err := slogLevel.UnmarshalText([]byte(level)); err != nil {
+		panic(fmt.Sprintf("an unvalidated log level reached the logger: %q", level))
+	}
+
+	applogger.SetDefaultsForLogger(ctx, slogLevel)
 }
 
 // refusal turns the gate's refusal into the run's last word: the command that
@@ -164,7 +211,7 @@ func refusal(env *Env, err error) error {
 		return err
 	}
 
-	fmt.Fprintln(env.Stderr, refused.Error())
+	fmt.Fprintln(env.Stderr, env.Name+" policy allow "+refused.Policy)
 
 	return shutdown.ExitError(1) //nolint:wrapcheck // the status is the answer; the refusal is on stderr.
 }
@@ -197,11 +244,15 @@ func parse(ctx context.Context, cli *grammar, env *Env) (kctx *kong.Context, err
 	}()
 
 	parser, err := kong.New(cli,
-		kong.Name(rootdir.Name),
+		kong.Name(env.Name),
 		kong.Description(description),
 		kong.Writers(env.Stdout, env.Stderr),
 		kong.UsageOnError(),
-		kong.Vars{"version": env.Version, "limit": strconv.Itoa(config.DefaultVerCnt)},
+		kong.Vars{
+			"version":  env.Version,
+			"limit":    strconv.Itoa(config.DefaultVerCnt),
+			"logLevel": defaultLogLevel,
+		},
 		kong.BindTo(ctx, (*context.Context)(nil)),
 		kong.Bind(env),
 		kong.Exit(func(code int) { panic(exitRequest(code)) }),
@@ -216,27 +267,10 @@ func parse(ctx context.Context, cli *grammar, env *Env) (kctx *kong.Context, err
 	return kctx, nil
 }
 
-// levelOf is the slog level a name selects; kong has validated the flag's, the
-// variable's is checked here.
-func levelOf(name string) (slog.Level, error) {
-	switch name {
-	case "debug":
-		return slog.LevelDebug, nil
-	case "info":
-		return slog.LevelInfo, nil
-	case "warn":
-		return slog.LevelWarn, nil
-	case "error":
-		return slog.LevelError, nil
-	default:
-		return 0, fmt.Errorf("%w: %q", errNotLevel, name)
-	}
-}
-
 // syncBin mirrors best effort after a run that may have changed what aqua
-// exposes: the run's own result stands either way.
-func syncBin(ctx context.Context, logger *slog.Logger, r rootdir.Root) {
-	if err := mirror.Sync(r, runtime.GOOS); err != nil {
-		logger.WarnContext(ctx, "mirror aqua's commands into the bin", "error", err)
+// exposes: the run's own result stands either way. self is the root's binary.
+func syncBin(ctx context.Context, lib *library.Library, self string) {
+	if err := mirror.Sync(lib.Root, self, runtime.GOOS); err != nil {
+		lib.Logger.WarnContext(ctx, "mirror aqua's commands into the bin", "error", err)
 	}
 }

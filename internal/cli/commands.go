@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"runtime"
 	"strings"
 
 	"github.com/alecthomas/kong"
@@ -22,7 +23,7 @@ import (
 // here calls. A command or a flag outside the grammar fails as unknown.
 type grammar struct {
 	Config   string           `help:"Configuration file path."    placeholder:"PATH"           short:"c"`
-	LogLevel string           `default:"info"                     enum:"debug,info,warn,error" env:"HERMETIC_LOG_LEVEL" help:"Log level."`
+	LogLevel string           `default:"${logLevel}"              enum:"debug,info,warn,error" env:"HERMETIC_LOG_LEVEL" help:"Log level."`
 	Version  kong.VersionFlag `help:"Print the version and quit." short:"v"`
 
 	Install        installCmd        `aliases:"i"   cmd:""                                                      help:"Install tools."`
@@ -45,7 +46,7 @@ type installCmd struct {
 }
 
 // Run installs through the library, then mirrors what it exposed.
-func (c *installCmd) Run(ctx context.Context, lib *library.Library) error {
+func (c *installCmd) Run(ctx context.Context, lib *library.Library, env *Env) error {
 	param := lib.Param()
 	param.OnlyLink = c.OnlyLink
 	param.All = c.All
@@ -62,7 +63,7 @@ func (c *installCmd) Run(ctx context.Context, lib *library.Library) error {
 		return err
 	}
 
-	syncBin(ctx, lib.Logger, lib.Root)
+	syncBin(ctx, lib, lib.Root.Binary(env.Name, runtime.GOOS))
 
 	return nil
 }
@@ -81,7 +82,7 @@ type updateCmd struct {
 }
 
 // Run updates through the library, then mirrors what it exposed.
-func (c *updateCmd) Run(ctx context.Context, lib *library.Library) error {
+func (c *updateCmd) Run(ctx context.Context, lib *library.Library, env *Env) error {
 	param := lib.Param()
 	param.Insert = c.Interactive
 	param.SelectVersion = c.SelectVersion
@@ -101,7 +102,7 @@ func (c *updateCmd) Run(ctx context.Context, lib *library.Library) error {
 		return err
 	}
 
-	syncBin(ctx, lib.Logger, lib.Root)
+	syncBin(ctx, lib, lib.Root.Binary(env.Name, runtime.GOOS))
 
 	return nil
 }
@@ -174,7 +175,7 @@ type whichCmd struct {
 }
 
 // Run prints the path, or the version, the library resolves.
-func (c *whichCmd) Run(ctx context.Context, lib *library.Library) error {
+func (c *whichCmd) Run(ctx context.Context, lib *library.Library, env *Env) error {
 	param := lib.Param()
 	param.ShowVersion = c.ShowVersion
 
@@ -184,12 +185,12 @@ func (c *whichCmd) Run(ctx context.Context, lib *library.Library) error {
 	}
 
 	if !c.ShowVersion {
-		path, err := dispatch.PastLink(lib.Root, found.ExePath, c.Command)
+		path, err := dispatch.PastLink(lib.Root.Binary(env.Name, runtime.GOOS), found.ExePath, c.Command)
 		if err != nil {
 			return err
 		}
 
-		fmt.Fprintln(lib.Stdout, path)
+		fmt.Fprintln(env.Stdout, path)
 
 		return nil
 	}
@@ -198,7 +199,7 @@ func (c *whichCmd) Run(ctx context.Context, lib *library.Library) error {
 		return fmt.Errorf("%w: %s", errNotManaged, c.Command)
 	}
 
-	fmt.Fprintln(lib.Stdout, found.Package.Package.Version)
+	fmt.Fprintln(env.Stdout, found.Package.Package.Version)
 
 	return nil
 }
@@ -240,8 +241,8 @@ func (c *policyDenyCmd) Run(ctx context.Context, lib *library.Library) error {
 type rootDirCmd struct{}
 
 // Run prints the library's root.
-func (*rootDirCmd) Run(lib *library.Library) error {
-	fmt.Fprintln(lib.Stdout, lib.Root.AquaRoot())
+func (*rootDirCmd) Run(lib *library.Library, env *Env) error {
+	fmt.Fprintln(env.Stdout, lib.Root.AquaRoot())
 
 	return nil
 }

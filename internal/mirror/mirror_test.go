@@ -16,6 +16,9 @@ import (
 	"github.com/forkcloser/hermetic/internal/rootdir"
 )
 
+// binName is the name cmd/hermetic gives the binary.
+const binName = "hermetic"
+
 // mirrorRoot is a scratch root with a binary for the platform named and the
 // commands aqua exposes, as symlinks to its proxy the way aqua links them.
 func mirrorRoot(t *testing.T, goos string, exposed ...string) (rootdir.Root, string) {
@@ -32,7 +35,7 @@ func mirrorRoot(t *testing.T, goos string, exposed ...string) (rootdir.Root, str
 		t.Fatal(err)
 	}
 
-	binary := root.Binary(goos)
+	binary := root.Binary(binName, goos)
 	if err := os.WriteFile(binary, []byte("#!/bin/sh\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +71,7 @@ func TestMirror(t *testing.T) {
 	root, binary := mirrorRoot(t, "linux", "aqua", "limen", "ssh")
 	// A stale link of ours, a wrong link under a wanted name, a foreign
 	// symlink, and a foreign file.
-	if err := os.Symlink(rootdir.Name, filepath.Join(root.Bin(), "gone")); err != nil {
+	if err := os.Symlink(binName, filepath.Join(root.Bin(), "gone")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -84,7 +87,7 @@ func TestMirror(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := mirror.Sync(root, "linux"); err != nil {
+	if err := mirror.Sync(root, root.Binary(binName, "linux"), "linux"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -94,12 +97,12 @@ func TestMirror(t *testing.T) {
 			t.Fatalf("%s: %v", name, err)
 		}
 
-		if target != rootdir.Name {
-			t.Fatalf("%s -> %q, want %q", name, target, rootdir.Name)
+		if target != binName {
+			t.Fatalf("%s -> %q, want %q", name, target, binName)
 		}
 	}
 
-	if want := []string{rootdir.Name, "keep", "limen", "ssh", "theirs"}; !slices.Equal(binNames(t, root), want) {
+	if want := []string{binName, "keep", "limen", "ssh", "theirs"}; !slices.Equal(binNames(t, root), want) {
 		t.Fatalf(
 			"bin = %v, want %v (aqua not mirrored, the stale link gone, the foreign entries kept)",
 			binNames(t, root),
@@ -116,11 +119,11 @@ func TestMirror(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := mirror.Sync(root, "linux"); err != nil {
+	if err := mirror.Sync(root, root.Binary(binName, "linux"), "linux"); err != nil {
 		t.Fatal(err)
 	}
 
-	if want := []string{rootdir.Name, "keep", "limen", "theirs"}; !slices.Equal(binNames(t, root), want) {
+	if want := []string{binName, "keep", "limen", "theirs"}; !slices.Equal(binNames(t, root), want) {
 		t.Fatalf("bin = %v, want %v", binNames(t, root), want)
 	}
 
@@ -129,7 +132,12 @@ func TestMirror(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := mirror.Sync(root, "linux"); err == nil || !strings.Contains(err.Error(), "the binary") {
+	if err := mirror.Sync(
+		root,
+		root.Binary(binName, "linux"),
+		"linux",
+	); err == nil ||
+		!strings.Contains(err.Error(), "the binary") {
 		t.Fatalf("without the binary: %v", err)
 	}
 }
@@ -143,7 +151,7 @@ func TestMirrorHardLinks(t *testing.T) {
 
 	root, binary := mirrorRoot(t, "windows", "aqua.exe", "limen.exe")
 
-	if err := mirror.Sync(root, "windows"); err != nil {
+	if err := mirror.Sync(root, root.Binary(binName, "windows"), "windows"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -177,7 +185,7 @@ func TestMirrorHardLinks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := mirror.Sync(root, "windows"); err != nil {
+	if err := mirror.Sync(root, root.Binary(binName, "windows"), "windows"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -233,7 +241,7 @@ func TestMirrorConverges(t *testing.T) {
 					write(t, filepath.Join(aquaBin, name), "")
 				}
 
-				if name == rootdir.Name {
+				if name == binName {
 					continue
 				}
 
@@ -242,7 +250,7 @@ func TestMirrorConverges(t *testing.T) {
 
 				switch kind {
 				case "ours":
-					symlink(t, rootdir.Name, path)
+					symlink(t, binName, path)
 				case "ours-absolute":
 					symlink(t, binary, path)
 				case "foreign-link":
@@ -262,7 +270,7 @@ func TestMirrorConverges(t *testing.T) {
 
 			aquaBefore := listing(t, aquaBin)
 
-			if err := mirror.Sync(root, "linux"); err != nil {
+			if err := mirror.Sync(root, root.Binary(binName, "linux"), "linux"); err != nil {
 				t.Fatalf("%v: %v", before, err)
 			}
 
@@ -272,10 +280,10 @@ func TestMirrorConverges(t *testing.T) {
 				for _, name := range names {
 					path := filepath.Join(root.Bin(), name)
 					target, err := os.Readlink(path)
-					linked := err == nil && (target == rootdir.Name || target == binary)
+					linked := err == nil && (target == binName || target == binary)
 
 					switch {
-					case name == rootdir.Name:
+					case name == binName:
 						// The binary itself, never touched.
 						if info, statErr := os.Lstat(path); statErr != nil || info.Mode()&os.ModeSymlink != 0 {
 							t.Errorf("%s: the binary: %v", pass, statErr)
@@ -316,7 +324,7 @@ func TestMirrorConverges(t *testing.T) {
 
 			after := listing(t, root.Bin())
 
-			if err := mirror.Sync(root, "linux"); err != nil {
+			if err := mirror.Sync(root, root.Binary(binName, "linux"), "linux"); err != nil {
 				t.Fatal(err)
 			}
 

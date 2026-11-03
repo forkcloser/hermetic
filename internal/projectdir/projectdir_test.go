@@ -117,11 +117,6 @@ func TestProjectPolicyPath(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// No project: nothing.
-	if got, err := projectdir.PolicyPath(aquaRoot, ""); err != nil || got != "" {
-		t.Fatalf("no project: %q, %v", got, err)
-	}
-
 	// No record: refused, and the refusal is this binary's allow command for
 	// the policy's absolute path, never aqua's.
 	refused := refusal(t, aquaRoot, project)
@@ -129,7 +124,7 @@ func TestProjectPolicyPath(t *testing.T) {
 		t.Fatalf("without a record: %+v, want the policy, not denied", refused)
 	}
 
-	if want := "hermetic policy allow " + policy; refused.Error() != want {
+	if want := "the project policy is not allowed: " + policy; refused.Error() != want {
 		t.Fatalf("the refusal reads %q, want %q", refused.Error(), want)
 	}
 

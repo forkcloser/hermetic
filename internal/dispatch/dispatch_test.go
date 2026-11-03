@@ -6,8 +6,10 @@ import (
 	"testing"
 
 	"github.com/forkcloser/hermetic/internal/dispatch"
-	"github.com/forkcloser/hermetic/internal/rootdir"
 )
+
+// binName is the name cmd/hermetic gives the binary.
+const binName = "hermetic"
 
 func TestDispatched(t *testing.T) {
 	t.Parallel()
@@ -52,7 +54,7 @@ func TestDispatched(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 
-			tool, toolArgs := dispatch.Target(c.args, c.goos)
+			tool, toolArgs := dispatch.Target(c.args, binName, c.goos)
 			if tool != c.tool {
 				t.Fatalf("tool = %q, want %q", tool, c.tool)
 			}
@@ -104,7 +106,7 @@ func TestDispatchedEveryNameShape(t *testing.T) {
 	}
 
 	for _, c := range cases {
-		tool, args := dispatch.Target([]string{c.argv0, "x", "y"}, c.goos)
+		tool, args := dispatch.Target([]string{c.argv0, "x", "y"}, binName, c.goos)
 		if tool != c.tool {
 			t.Errorf("Target(%q, %s) = %q, want %q", c.argv0, c.goos, tool, c.tool)
 		}
@@ -126,7 +128,7 @@ func FuzzTarget(f *testing.F) {
 			goos = "windows"
 		}
 
-		tool, args := dispatch.Target([]string{argv0, arg}, goos)
+		tool, args := dispatch.Target([]string{argv0, arg}, binName, goos)
 
 		// A tool is the last path element, never the binary's name, never
 		// empty, never a path; its arguments are the rest, untouched.
@@ -134,7 +136,7 @@ func FuzzTarget(f *testing.F) {
 			return
 		}
 
-		if tool == rootdir.Name || strings.ContainsAny(tool, "/") ||
+		if tool == binName || strings.ContainsAny(tool, "/") ||
 			(goos == "windows" && strings.ContainsAny(tool, `\`)) {
 			t.Fatalf("Target(%q, %s) = %q", argv0, goos, tool)
 		}

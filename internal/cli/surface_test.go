@@ -13,10 +13,12 @@ import (
 	"github.com/mycophonic/primordium/app/shutdown"
 
 	"github.com/forkcloser/hermetic/internal/cli"
-	"github.com/forkcloser/hermetic/internal/library"
 	"github.com/forkcloser/hermetic/internal/projectdir"
 	"github.com/forkcloser/hermetic/internal/rootdir"
 )
+
+// binName is the name cmd/hermetic gives the binary.
+const binName = "hermetic"
 
 // TestSurface holds the binary to the commands and global flags it exposes, as
 // its own help lists them, and refuses what is cut: a command, a verifier
@@ -25,7 +27,7 @@ func TestSurface(t *testing.T) {
 	// Run resolves the root, applies the library's environment to the process
 	// and walks the working directory for a project: a scratch root, an empty
 	// working directory, and no Parallel.
-	t.Setenv(rootdir.Env, t.TempDir())
+	t.Setenv(rootDirVar, t.TempDir())
 	t.Chdir(t.TempDir())
 
 	help, err := invoke(t, "--help")
@@ -107,11 +109,11 @@ func invoke(t *testing.T, args ...string) (string, error) {
 	}()
 
 	env := &cli.Env{
+		Name:    binName,
 		Version: "test",
 		Stdout:  writer,
 		Stderr:  writer,
-		Getenv:  os.Getenv,
-		Args:    append([]string{rootdir.Name}, args...),
+		Args:    append([]string{binName}, args...),
 	}
 
 	runErr := cli.Run(t.Context(), env)
@@ -177,7 +179,7 @@ func TestNoRootForVersionAndUsage(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	t.Setenv(rootdir.Env, "")
+	t.Setenv(rootDirVar, "")
 	t.Setenv("HOME", file)
 	t.Setenv("LOCALAPPDATA", file)
 	// Linux reads this ahead of the home when it is set and absolute.
@@ -216,7 +218,7 @@ func TestNoRootForVersionAndUsage(t *testing.T) {
 // sees no gate at all.
 func TestNamedConfigCarriesItsProject(t *testing.T) {
 	root := rootdir.Root(t.TempDir())
-	t.Setenv(rootdir.Env, string(root))
+	t.Setenv(rootDirVar, string(root))
 	write(t, root.GlobalConfig(), "packages: []\n")
 	write(t, root.Policy(), "registries:\n  - type: standard\n")
 
@@ -301,7 +303,7 @@ func TestNamedConfigCarriesItsProject(t *testing.T) {
 
 	for _, c := range runs {
 		t.Chdir(c.dir)
-		t.Setenv(library.ConfigEnv, c.env)
+		t.Setenv("HERMETIC_CONFIG", c.env)
 
 		out, err := invoke(t, c.args...)
 

@@ -57,7 +57,7 @@ func TestEnvironmentAtTheBinary(t *testing.T) {
 	// filesystem, and a temporary directory may sit behind a symlink.
 	outside := canonical(t, t.TempDir())
 
-	base := append(os.Environ(), asBinary+"=1", rootdir.Env+"="+root)
+	base := append(os.Environ(), asBinary+"=1", rootDirVar+"="+root)
 
 	cases := []struct {
 		name   string
@@ -94,7 +94,7 @@ func TestEnvironmentAtTheBinary(t *testing.T) {
 		},
 		{
 			name: "the root follows HERMETIC_ROOT_DIR, made absolute",
-			env:  []string{rootdir.Env + "=rel"}, args: []string{"root-dir"},
+			env:  []string{rootDirVar + "=rel"}, args: []string{"root-dir"},
 			status: 0, stdout: filepath.Join(outside, "rel", "store"),
 		},
 		{
@@ -200,7 +200,7 @@ func TestPolicyRecordsAtTheBinary(t *testing.T) {
 	write(t, filepath.Join(project, projectdir.Dir, projectdir.Config), "packages: []\n")
 	write(t, policy, "registries:\n  - type: standard\n")
 
-	env := append(os.Environ(), asBinary+"=1", rootdir.Env+"="+root)
+	env := append(os.Environ(), asBinary+"=1", rootDirVar+"="+root)
 	record := filepath.Join(root, "store", "policies", strings.ReplaceAll(policy, ":", "_"))
 	denied := filepath.Join(root, "store", "policy-warnings", strings.ReplaceAll(policy, ":", "_"))
 	allow := "hermetic policy allow " + policy + "\n"
@@ -306,7 +306,7 @@ func TestDispatchedToolEnvironmentAtTheBinary(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := os.Link(self, root.Binary(runtime.GOOS)); err != nil {
+	if err := os.Link(self, root.Binary(binName, runtime.GOOS)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -321,7 +321,7 @@ func TestDispatchedToolEnvironmentAtTheBinary(t *testing.T) {
 
 	path := strings.Join([]string{root.Bin(), system, "/bin", "/usr/bin"}, string(os.PathListSeparator))
 	env := append(os.Environ(),
-		asBinary+"=1", rootdir.Env+"="+string(root), "PATH="+path,
+		asBinary+"=1", rootDirVar+"="+string(root), "PATH="+path,
 		"AQUA_ROOT_DIR=/theirs", "AQUA_GLOBAL_CONFIG=/theirs.yaml", "AQUA_SOMETHING=x",
 		"COSIGN_PASSWORD=kept", "GITHUB_TOKEN=kept", "TUF_ROOT=/kept", "GH_TOKEN=kept",
 		"HERMETIC_GITHUB_TOKEN=ours",

@@ -9,9 +9,8 @@ import (
 	"github.com/forkcloser/hermetic/internal/rootdir"
 )
 
-func getenv(m map[string]string) func(string) string {
-	return func(k string) string { return m[k] }
-}
+// binName is the name cmd/hermetic gives the binary, and primordium's dirs.
+const binName = "hermetic"
 
 func TestRootFrom(t *testing.T) {
 	// The default root is created on resolution, so the platform's base
@@ -20,9 +19,11 @@ func TestRootFrom(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_DATA_HOME", filepath.Join(home, "xdg"))
 	t.Setenv("LOCALAPPDATA", filepath.Join(home, "local"))
+	// The precondition the binary meets in cli.Main.
+	dirs.SetAppName(binName)
 
-	// The variable wins, made absolute and cleaned.
-	got, err := rootdir.From(getenv(map[string]string{rootdir.Env: filepath.FromSlash("/r/")}))
+	// A named root wins, made absolute and cleaned.
+	got, err := rootdir.From(filepath.FromSlash("/r/"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +39,7 @@ func TestRootFrom(t *testing.T) {
 
 	// A relative value is made absolute, so the derived variables survive a
 	// dispatched tool's own working directory.
-	got, err = rootdir.From(getenv(map[string]string{rootdir.Env: "rel"}))
+	got, err = rootdir.From("rel")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,14 +48,12 @@ func TestRootFrom(t *testing.T) {
 		t.Fatalf("relative root: %q", got)
 	}
 
-	// Without the variable, the platform's data directory for the name, as
-	// primordium resolves it.
-	got, err = rootdir.From(getenv(nil))
+	// Without one, the platform's data directory for the application name,
+	// as primordium resolves it.
+	got, err = rootdir.From("")
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	dirs.SetAppName(rootdir.Name)
 
 	want, err = dirs.DataDir()
 	if err != nil {
@@ -65,8 +64,8 @@ func TestRootFrom(t *testing.T) {
 		t.Fatalf("default: root = %q, want primordium's %q", got, want)
 	}
 
-	if filepath.Base(want) != rootdir.Name {
-		t.Fatalf("the default root is not named after the binary: %q", want)
+	if filepath.Base(want) != binName {
+		t.Fatalf("the default root is not named after the application: %q", want)
 	}
 }
 
@@ -81,8 +80,8 @@ func TestRootPaths(t *testing.T) {
 		{"aqua root", root.AquaRoot(), filepath.Join("r", "x", "store")},
 		{"global config", root.GlobalConfig(), filepath.Join("r", "x", "hermetic.yaml")},
 		{"policy", root.Policy(), filepath.Join("r", "x", "policy.yaml")},
-		{"binary", root.Binary("linux"), filepath.Join("r", "x", "bin", "hermetic")},
-		{"binary on windows", root.Binary("windows"), filepath.Join("r", "x", "bin", "hermetic.exe")},
+		{"binary", root.Binary(binName, "linux"), filepath.Join("r", "x", "bin", "hermetic")},
+		{"binary on windows", root.Binary(binName, "windows"), filepath.Join("r", "x", "bin", "hermetic.exe")},
 	} {
 		if c.got != c.want {
 			t.Errorf("%s = %q, want %q", c.name, c.got, c.want)

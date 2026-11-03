@@ -4,27 +4,23 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
-	"strconv"
 
 	"github.com/aquaproj/aqua/v2/pkg/config"
-	finder "github.com/aquaproj/aqua/v2/pkg/config-finder"
-	"github.com/aquaproj/aqua/v2/pkg/policy"
 
 	"github.com/forkcloser/hermetic/internal/rootdir"
 )
 
-// libraryParam is what the library's controllers run under, derived from the
-// environment the binary set for them (set, as Environment returns it)
-// and nothing else: not the library's own flag layer, and not its settings
-// file, which stays the human's because every value it could supply is pinned
-// in set. A command that names its config (configFlag) wins over the project
-// walk's AQUA_CONFIG.
-func libraryParam(
-	logger *slog.Logger,
+// newParam is what the library's controllers run under. aqua's own command
+// layer, which reads its settings file and AQUA_* variables into this struct,
+// is not linked: every field is set here. The policy gate and the lazy install
+// on, checksums verified and required whatever a config says, the vacuum's
+// use tracking off (vacuum is not exposed), no progress bar, the library's
+// default parallelism.
+func newParam(
+	log *slog.Logger,
 	root rootdir.Root,
-	set map[string]string,
-	version, configFlag, logLevel string,
+	opts Options,
+	configPath, projectPolicy string,
 ) (*config.Param, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -35,50 +31,43 @@ func libraryParam(
 	home, _ := os.UserHomeDir()
 
 	param := &config.Param{
-		CWD:                   cwd,
-		HomeDir:               home,
-		AQUAVersion:           version,
-		ConfigFilePath:        configFlag,
-		LogLevel:              logLevel,
-		LogColor:              set[aquaPrefix+"LOG_COLOR"],
-		RootDir:               root.AquaRoot(),
-		MaxParallelism:        config.GetMaxParallelism(set[aquaPrefix+"MAX_PARALLELISM"], 0, logger),
-		GlobalConfigFilePaths: finder.ParseGlobalConfigFilePaths(cwd, set[aquaGlobalConfigEnv]),
+		CWD:                    cwd,
+		HomeDir:                home,
+		AQUAVersion:            opts.Version,
+		ConfigFilePath:         configPath,
+		LogLevel:               opts.LogLevel,
+		RootDir:                root.AquaRoot(),
+		MaxParallelism:         config.GetMaxParallelism("", 0, log),
+		PolicyConfigFilePaths:  policies(root, projectPolicy),
+		Checksum:               true,
+		RequireChecksum:        true,
+		EnforceChecksum:        true,
+		EnforceRequireChecksum: true,
+		DisableTracking:        true,
 	}
 
-	if param.ConfigFilePath == "" {
-		param.ConfigFilePath = set[aquaConfigEnv]
-	}
-
-	for _, flag := range []struct {
-		key    string
-		target *bool
-	}{
-		{"PROGRESS_BAR", &param.ProgressBar},
-		{"DISABLE_LAZY_INSTALL", &param.DisableLazyInstall},
-		{"DISABLE_POLICY", &param.DisablePolicy},
-		{"DISABLE_TRACKING", &param.DisableTracking},
-		{"CHECKSUM", &param.Checksum},
-		{"REQUIRE_CHECKSUM", &param.RequireChecksum},
-		{"ENFORCE_CHECKSUM", &param.EnforceChecksum},
-		{"ENFORCE_REQUIRE_CHECKSUM", &param.EnforceRequireChecksum},
-	} {
-		value, err := strconv.ParseBool(set[aquaPrefix+flag.key])
-		if err != nil {
-			return nil, fmt.Errorf("%s%s is not a boolean: %w", aquaPrefix, flag.key, err)
-		}
-
-		*flag.target = value
-	}
-
-	if !param.DisablePolicy {
-		param.PolicyConfigFilePaths = policy.ParseEnv(set[aquaPolicyConfigEnv])
-		for i, p := range param.PolicyConfigFilePaths {
-			if !filepath.IsAbs(p) {
-				param.PolicyConfigFilePaths[i] = filepath.Join(cwd, p)
-			}
-		}
+	if !opts.NoGlobalConfig {
+		param.GlobalConfigFilePaths = []string{root.GlobalConfig()}
 	}
 
 	return param, nil
+}
+
+// policies are the policies the library trusts on sight: the root's, the
+// toolset's own, when the root holds one, then the project's when one passed
+// the gate. A root with no toolset in it, a runner's or a fresh session's, has
+// no policy of its own, and the library refuses a listed file that is not
+// there; so the list is of what exists, never of what a root should have.
+func policies(root rootdir.Root, projectPolicy string) []string {
+	var paths []string
+
+	if _, err := os.Stat(root.Policy()); err == nil {
+		paths = append(paths, root.Policy())
+	}
+
+	if projectPolicy != "" {
+		paths = append(paths, projectPolicy)
+	}
+
+	return paths
 }

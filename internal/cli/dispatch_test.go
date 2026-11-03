@@ -64,14 +64,14 @@ func TestDispatchPassesOverTheRunningBinary(t *testing.T) {
 	link(t, rig.root, tool)
 
 	other := rootdir.Root(t.TempDir())
-	write(t, other.Binary(runtime.GOOS), "not the binary running\n")
+	write(t, other.Binary(binName, runtime.GOOS), "not the binary running\n")
 
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 
 	run := exec.CommandContext(ctx, filepath.Join(rig.root.Bin(), exe(tool)))
 	run.Dir = rig.outside
-	run.Env = append(slices.Clone(rig.env), rootdir.Env+"="+string(other))
+	run.Env = append(slices.Clone(rig.env), rootDirVar+"="+string(other))
 
 	out, err := run.CombinedOutput()
 	if err != nil || strings.TrimSpace(string(out)) != "fake" {
@@ -91,7 +91,7 @@ func TestWhichAnswersPastItsOwnLink(t *testing.T) {
 
 	link(t, rig.root, tool)
 
-	run := exec.CommandContext(t.Context(), rig.root.Binary(runtime.GOOS), "which", tool)
+	run := exec.CommandContext(t.Context(), rig.root.Binary(binName, runtime.GOOS), "which", tool)
 	run.Dir, run.Env = rig.outside, rig.env
 
 	out, err := run.Output()
@@ -101,7 +101,7 @@ func TestWhichAnswersPastItsOwnLink(t *testing.T) {
 
 	link(t, rig.root, "nothingpast")
 
-	refused := exec.CommandContext(t.Context(), rig.root.Binary(runtime.GOOS), "which", "nothingpast")
+	refused := exec.CommandContext(t.Context(), rig.root.Binary(binName, runtime.GOOS), "which", "nothingpast")
 	refused.Dir, refused.Env = rig.outside, rig.env
 
 	out, err = refused.Output()
@@ -132,7 +132,7 @@ func TestWhichFromARootWithoutABinary(t *testing.T) {
 	}
 
 	path := strings.Join([]string{system, "/bin", "/usr/bin"}, string(os.PathListSeparator))
-	env := append(os.Environ(), asBinary+"=1", rootdir.Env+"="+t.TempDir(), "PATH="+path)
+	env := append(os.Environ(), asBinary+"=1", rootDirVar+"="+t.TempDir(), "PATH="+path)
 
 	run := exec.CommandContext(t.Context(), binaryNamed(t), "which", tool)
 	run.Dir, run.Env = t.TempDir(), env
@@ -158,7 +158,7 @@ func TestDispatchRunsTheFileItResolved(t *testing.T) {
 	elsewhere := t.TempDir()
 	ahead := filepath.Join(elsewhere, exe(tool))
 
-	if err := os.Link(rig.root.Binary(runtime.GOOS), ahead); err != nil {
+	if err := os.Link(rig.root.Binary(binName, runtime.GOOS), ahead); err != nil {
 		t.Fatal(err)
 	}
 
@@ -214,7 +214,7 @@ func linkedRoot(t *testing.T) linkedRig {
 	}
 	// The root's binary is this test binary, as a hard link: SameFile with
 	// what the links resolve to, as in a root the installer wrote.
-	if err := os.Link(self, root.Binary(runtime.GOOS)); err != nil {
+	if err := os.Link(self, root.Binary(binName, runtime.GOOS)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -254,7 +254,7 @@ func linkedRoot(t *testing.T) linkedRig {
 	// The PATH a shell has: the root's bin first, the decoys, then the system;
 	// sh for the script where the script needs it.
 	path := strings.Join(append(ahead, system, "/bin", "/usr/bin"), string(os.PathListSeparator))
-	env := append(os.Environ(), asBinary+"=1", rootdir.Env+"="+string(root), "PATH="+path)
+	env := append(os.Environ(), asBinary+"=1", rootDirVar+"="+string(root), "PATH="+path)
 
 	// Outside any project, as the scripts that met this ran: a project's policy
 	// would otherwise join the output with the gate's warning.
@@ -269,14 +269,14 @@ func link(t *testing.T, root rootdir.Root, name string) {
 	target := filepath.Join(root.Bin(), exe(name))
 
 	if runtime.GOOS == "windows" {
-		if err := os.Link(root.Binary(runtime.GOOS), target); err != nil {
+		if err := os.Link(root.Binary(binName, runtime.GOOS), target); err != nil {
 			t.Fatal(err)
 		}
 
 		return
 	}
 
-	if err := os.Symlink(rootdir.Name, target); err != nil {
+	if err := os.Symlink(binName, target); err != nil {
 		t.Fatal(err)
 	}
 }

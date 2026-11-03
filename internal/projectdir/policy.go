@@ -11,13 +11,11 @@ import (
 
 	"github.com/aquaproj/aqua/v2/pkg/config"
 	"github.com/aquaproj/aqua/v2/pkg/policy"
-
-	"github.com/forkcloser/hermetic/internal/rootdir"
 )
 
 // RefusedPolicyError is the gate holding: the project's policy has no matching
-// `policy allow` record on this machine. Its text is the command that allows
-// the policy, the whole of what a run says before it stops.
+// `policy allow` record on this machine. The cli answers it with the command
+// that allows the policy, the whole of what a run says before it stops.
 type RefusedPolicyError struct {
 	// Policy is the policy's absolute path.
 	Policy string
@@ -27,7 +25,7 @@ type RefusedPolicyError struct {
 }
 
 func (e *RefusedPolicyError) Error() string {
-	return rootdir.Name + " policy allow " + e.Policy
+	return "the project policy is not allowed: " + e.Policy
 }
 
 // PolicyPath is the gate. Everything AQUA_POLICY_CONFIG names is trusted
@@ -38,16 +36,10 @@ func (e *RefusedPolicyError) Error() string {
 // <aqua root>/policies matches byte for byte; a project without a policy has
 // nothing to gate; otherwise the policy is refused, Denied when `policy deny`
 // recorded the human's choice. A cloned repository thus cannot allow a registry
-// of its choosing; `policy allow` is the one-time gate per machine.
+// of its choosing; `policy allow` is the one-time gate per machine. projectDir
+// is absolute, as Find returns it.
 func PolicyPath(aquaRoot, projectDir string) (string, error) {
-	if projectDir == "" {
-		return "", nil
-	}
-
-	policyPath, err := filepath.Abs(filepath.Join(projectDir, Policy))
-	if err != nil {
-		return "", fmt.Errorf("resolve the project policy: %w", err)
-	}
+	policyPath := filepath.Join(projectDir, Policy)
 
 	if _, err := os.Stat(policyPath); err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -61,25 +53,23 @@ func PolicyPath(aquaRoot, projectDir string) (string, error) {
 	if err := validator.Validate(policyPath); err != nil {
 		return "", &RefusedPolicyError{
 			Policy: policyPath,
-			Denied: recordExists(aquaRoot, "policy-warnings", policyPath),
+			Denied: denied(aquaRoot, policyPath),
 		}
 	}
 
 	return policyPath, nil
 }
 
-// recordExists reports whether the library holds a record for the policy under
-// the directory named in its root: `policies`, which `policy allow` writes, or
-// `policy-warnings`, which `policy deny` writes. A record is keyed by the
-// policy's normalized absolute path (on Windows the drive's colon becomes an
-// underscore), as aqua keys it.
-func recordExists(aquaRoot, dir, policyPath string) bool {
+// denied reports whether `policy deny` recorded the policy: a record under the
+// library's policy-warnings, keyed by the policy's absolute path (on Windows
+// the drive's colon becomes an underscore), as aqua keys it.
+func denied(aquaRoot, policyPath string) bool {
 	name := policyPath
 	if runtime.GOOS == "windows" {
 		name = strings.ReplaceAll(policyPath, ":", "_")
 	}
 
-	_, err := os.Stat(filepath.Join(aquaRoot, dir, name))
+	_, err := os.Stat(filepath.Join(aquaRoot, "policy-warnings", name))
 
 	return err == nil
 }
