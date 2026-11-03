@@ -23,6 +23,11 @@ golangci:
           # The library's error from a run IS the command's result, reported
           # as aqua reports it; a wrapper would prefix every message a user sees.
           - github.com/aquaproj/aqua/v2/*
+          # This module's own packages: each error they return names its
+          # context already, and the gate's refusal and a dispatch's lookup
+          # failure are what the user reads; a wrapper at every package
+          # boundary would stack prefixes onto those messages.
+          - github.com/forkcloser/hermetic/internal/*
 licenses:
   # Replaces the baseline's list. aqua's dependency graph carries MPL-2.0
   # (hashicorp's go-cleanhttp, go-version, golang-lru; suzuki-shunsuke's

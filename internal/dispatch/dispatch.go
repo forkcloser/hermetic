@@ -1,13 +1,13 @@
-package hermetic
+package dispatch
 
-import (
-	"strings"
-)
+import "strings"
 
-// Dispatched tells whether the binary was invoked under another name, through
-// a link in the root's bin: then that name is the tool to run, with the rest
-// of the arguments. Under its own name the binary is aqua, and tool is "".
-func Dispatched(args []string, goos string) (tool string, toolArgs []string) {
+const windows = "windows"
+
+// Target tells whether the binary, named self, was invoked under another name,
+// through a link in the root's bin: then that name is the tool to run, with the
+// rest of the arguments. Under its own name the binary is aqua, and tool is "".
+func Target(args []string, self, goos string) (tool string, toolArgs []string) {
 	if len(args) == 0 {
 		return "", nil
 	}
@@ -15,12 +15,12 @@ func Dispatched(args []string, goos string) (tool string, toolArgs []string) {
 	name := baseName(args[0], goos)
 	if goos == windows {
 		name = trimExe(name)
-		if strings.EqualFold(name, Name) {
+		if strings.EqualFold(name, self) {
 			return "", nil
 		}
 	}
 
-	if name == Name {
+	if name == self {
 		return "", nil
 	}
 

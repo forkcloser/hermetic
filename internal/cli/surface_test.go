@@ -1,4 +1,4 @@
-package hermetic_test
+package cli_test
 
 import (
 	"errors"
@@ -12,8 +12,13 @@ import (
 
 	"github.com/mycophonic/primordium/app/shutdown"
 
-	"github.com/forkcloser/hermetic/internal/hermetic"
+	"github.com/forkcloser/hermetic/internal/cli"
+	"github.com/forkcloser/hermetic/internal/projectdir"
+	"github.com/forkcloser/hermetic/internal/rootdir"
 )
+
+// binName is the name cmd/hermetic gives the binary.
+const binName = "hermetic"
 
 // TestSurface holds the binary to the commands and global flags it exposes, as
 // its own help lists them, and refuses what is cut: a command, a verifier
@@ -22,7 +27,7 @@ func TestSurface(t *testing.T) {
 	// Run resolves the root, applies the library's environment to the process
 	// and walks the working directory for a project: a scratch root, an empty
 	// working directory, and no Parallel.
-	t.Setenv(hermetic.RootEnv, t.TempDir())
+	t.Setenv(rootDirVar, t.TempDir())
 	t.Chdir(t.TempDir())
 
 	help, err := invoke(t, "--help")
@@ -103,15 +108,15 @@ func invoke(t *testing.T, args ...string) (string, error) {
 		captured <- string(out)
 	}()
 
-	env := &hermetic.Env{
+	env := &cli.Env{
+		Name:    binName,
 		Version: "test",
 		Stdout:  writer,
 		Stderr:  writer,
-		Getenv:  os.Getenv,
-		Args:    append([]string{hermetic.Name}, args...),
+		Args:    append([]string{binName}, args...),
 	}
 
-	runErr := hermetic.Run(t.Context(), env)
+	runErr := cli.Run(t.Context(), env)
 
 	_ = writer.Close()
 	out := <-captured
@@ -174,7 +179,7 @@ func TestNoRootForVersionAndUsage(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	t.Setenv(hermetic.RootEnv, "")
+	t.Setenv(rootDirVar, "")
 	t.Setenv("HOME", file)
 	t.Setenv("LOCALAPPDATA", file)
 	// Linux reads this ahead of the home when it is set and absolute.
@@ -212,23 +217,23 @@ func TestNoRootForVersionAndUsage(t *testing.T) {
 // already; and without a named config a working directory outside any project
 // sees no gate at all.
 func TestNamedConfigCarriesItsProject(t *testing.T) {
-	root := hermetic.Root(t.TempDir())
-	t.Setenv(hermetic.RootEnv, string(root))
+	root := rootdir.Root(t.TempDir())
+	t.Setenv(rootDirVar, string(root))
 	write(t, root.GlobalConfig(), "packages: []\n")
 	write(t, root.Policy(), "registries:\n  - type: standard\n")
 
-	project := filepath.Join(t.TempDir(), "repo", hermetic.ProjectDir)
-	write(t, filepath.Join(project, hermetic.ProjectConfig), "packages: []\n")
-	write(t, filepath.Join(project, hermetic.ProjectPolicy), "registries:\n  - type: standard\n")
+	project := filepath.Join(t.TempDir(), "repo", projectdir.Dir)
+	write(t, filepath.Join(project, projectdir.Config), "packages: []\n")
+	write(t, filepath.Join(project, projectdir.Policy), "registries:\n  - type: standard\n")
 
-	scratch := filepath.Join(t.TempDir(), "scratch", hermetic.ProjectConfig)
+	scratch := filepath.Join(t.TempDir(), "scratch", projectdir.Config)
 	write(t, scratch, "packages: []\n")
 
 	// A second project, denied: the record `policy deny` writes, keyed by the
 	// policy's path (the drive's colon an underscore on Windows).
-	denied := filepath.Join(t.TempDir(), "denied", hermetic.ProjectDir)
-	deniedPolicy := filepath.Join(denied, hermetic.ProjectPolicy)
-	write(t, filepath.Join(denied, hermetic.ProjectConfig), "packages: []\n")
+	denied := filepath.Join(t.TempDir(), "denied", projectdir.Dir)
+	deniedPolicy := filepath.Join(denied, projectdir.Policy)
+	write(t, filepath.Join(denied, projectdir.Config), "packages: []\n")
 	write(t, deniedPolicy, "registries:\n  - type: standard\n")
 	write(t, filepath.Join(root.AquaRoot(), "policy-warnings", strings.ReplaceAll(deniedPolicy, ":", "_")), "")
 
@@ -246,21 +251,21 @@ func TestNamedConfigCarriesItsProject(t *testing.T) {
 		{
 			"named by the variable",
 			outside,
-			filepath.Join(project, hermetic.ProjectConfig),
+			filepath.Join(project, projectdir.Config),
 			[]string{"root-dir"},
-			filepath.Join(project, hermetic.ProjectPolicy),
+			filepath.Join(project, projectdir.Policy),
 		},
 		{
 			"named by the flag",
 			outside,
 			"",
-			[]string{"-c", filepath.Join(project, hermetic.ProjectConfig), "root-dir"},
-			filepath.Join(project, hermetic.ProjectPolicy),
+			[]string{"-c", filepath.Join(project, projectdir.Config), "root-dir"},
+			filepath.Join(project, projectdir.Policy),
 		},
 		{
 			"denied, named by the variable",
 			outside,
-			filepath.Join(denied, hermetic.ProjectConfig),
+			filepath.Join(denied, projectdir.Config),
 			[]string{"root-dir"},
 			deniedPolicy,
 		},
@@ -268,7 +273,7 @@ func TestNamedConfigCarriesItsProject(t *testing.T) {
 			"denied, named by the flag",
 			outside,
 			"",
-			[]string{"-c", filepath.Join(denied, hermetic.ProjectConfig), "root-dir"},
+			[]string{"-c", filepath.Join(denied, projectdir.Config), "root-dir"},
 			deniedPolicy,
 		},
 		{"denied, by the walk", filepath.Dir(denied), "", []string{"root-dir"}, ""},
@@ -290,7 +295,7 @@ func TestNamedConfigCarriesItsProject(t *testing.T) {
 		runs = append(runs, run{
 			"the root's own manifest, through a symlinked root",
 			outside,
-			filepath.Join(linked, hermetic.ProjectConfig),
+			filepath.Join(linked, projectdir.Config),
 			[]string{"root-dir"},
 			"",
 		})
@@ -298,7 +303,7 @@ func TestNamedConfigCarriesItsProject(t *testing.T) {
 
 	for _, c := range runs {
 		t.Chdir(c.dir)
-		t.Setenv(hermetic.ConfigEnv, c.env)
+		t.Setenv("HERMETIC_CONFIG", c.env)
 
 		out, err := invoke(t, c.args...)
 

@@ -1,4 +1,4 @@
-package hermetic
+package mirror
 
 import (
 	"errors"
@@ -6,26 +6,36 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+
+	"github.com/mycophonic/primordium/filesystem"
+
+	"github.com/forkcloser/hermetic/internal/rootdir"
 )
 
-// Mirror makes the root's bin expose exactly the commands aqua exposes in its
-// own bin, aqua itself excepted, each as a link to the binary: a symlink to the
-// binary's name beside it, a hard link on Windows. The mirror owns those names:
-// whatever sits under one that is not a link to the binary (a hard link left on
-// a replaced binary, a symlink elsewhere) is replaced. Under any other name a
-// link of ours is removed, since aqua no longer exposes it, and anything else is
-// foreign and left alone. aqua's bin is read and never written, so there is no
-// second writer.
+const (
+	windows = "windows"
+
+	// dirPerm is the mode of the directories the mirror creates: the human's own.
+	dirPerm = filesystem.DirPermissionsPrivate
+)
+
+// Sync makes the root's bin expose exactly the commands aqua exposes in its own
+// bin, aqua itself excepted, each as a link to binary, the root's own in that
+// bin: a symlink to the binary's name beside it, a hard link on Windows. The
+// mirror owns those names: whatever sits under one that is not a link to the
+// binary (a hard link left on a replaced binary, a symlink elsewhere) is
+// replaced. Under any other name a link of ours is removed, since aqua no
+// longer exposes it, and anything else is foreign and left alone. aqua's bin is
+// read and never written, so there is no second writer.
 //
 // `aqua` is excepted because `update-aqua` places upstream's binary under that
 // name in aqua's bin; a mirrored `aqua` would dispatch `exec -- aqua` to it.
-func Mirror(root Root, goos string) error {
-	binary := root.Binary(goos)
+func Sync(root rootdir.Root, binary, goos string) error {
 	if _, err := os.Stat(binary); err != nil {
 		return fmt.Errorf("the binary the links point at: %w", err)
 	}
 
-	wanted, err := exposed(root.AquaRoot(), goos)
+	wanted, err := exposed(root.AquaRoot(), filepath.Base(binary), goos)
 	if err != nil {
 		return err
 	}
@@ -158,8 +168,9 @@ func classify(link, binary, goos string) (entryKind, error) {
 	return stale, nil
 }
 
-// exposed is the set of command names in aqua's bin, aqua itself excepted.
-func exposed(aquaRoot, goos string) (map[string]bool, error) {
+// exposed is the set of command names in aqua's bin, aqua itself and the
+// binary's own file name excepted.
+func exposed(aquaRoot, binaryName, goos string) (map[string]bool, error) {
 	entries, err := os.ReadDir(filepath.Join(aquaRoot, "bin"))
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -173,7 +184,7 @@ func exposed(aquaRoot, goos string) (map[string]bool, error) {
 
 	for _, entry := range entries {
 		name := entry.Name()
-		if name == exeName("aqua", goos) || name == exeName(Name, goos) {
+		if name == rootdir.ExeName("aqua", goos) || name == binaryName {
 			continue
 		}
 

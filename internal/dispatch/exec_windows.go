@@ -1,6 +1,6 @@
 //go:build windows
 
-package hermetic
+package dispatch
 
 import (
 	"context"
@@ -14,10 +14,10 @@ import (
 	"github.com/mycophonic/primordium/app/shutdown"
 )
 
-// execTool runs the tool as a child, since Windows has no exec: stdio
+// Exec runs the tool as a child, since Windows has no exec: stdio
 // inherited, the environment the one given, and its exit status carried out as
 // ours, silently, since the tool has said what it had to.
-func execTool(ctx context.Context, path, name string, args, environ []string) error {
+func Exec(ctx context.Context, path, name string, args, environ []string) error {
 	// #nosec G204 -- the path is what the library resolved for the name, the arguments the user's own.
 	cmd := exec.CommandContext(ctx, path, args...)
 	// A batch file runs as cmd.exe /c on the command line, not the path: under

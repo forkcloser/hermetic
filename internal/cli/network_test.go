@@ -1,4 +1,4 @@
-package hermetic_test
+package cli_test
 
 import (
 	"bufio"
@@ -15,16 +15,24 @@ import (
 	"testing"
 	"time"
 
-	"github.com/forkcloser/hermetic/internal/hermetic"
+	"github.com/mycophonic/primordium/filesystem/dirs"
+
+	"github.com/forkcloser/hermetic/internal/cli"
+	"github.com/forkcloser/hermetic/internal/projectdir"
 )
 
 // asBinary, set in a child's environment, makes the test binary run as the
 // binary itself: Main, under the name the dispatch reads from os.Args[0].
-const asBinary = "TEST_AS_THE_BINARY"
+const (
+	asBinary = "TEST_AS_THE_BINARY"
+
+	// rootDirVar names the binary's root.
+	rootDirVar = "HERMETIC_ROOT_DIR"
+)
 
 func TestMain(m *testing.M) {
 	if os.Getenv(asBinary) == "1" {
-		hermetic.Main("")
+		cli.Main(binName, "")
 
 		return
 	}
@@ -33,13 +41,15 @@ func TestMain(m *testing.M) {
 	// and manifest in the environment, which a child run as the binary would
 	// inherit over the scratch project the test built; the tests set what
 	// they need, so the process starts with none of the binary's variables.
-	for _, name := range []string{
-		hermetic.RootEnv, hermetic.ConfigEnv, hermetic.NoGlobalConfigEnv, hermetic.TokenEnv, hermetic.LogLevelEnv,
-	} {
-		if err := os.Unsetenv(name); err != nil {
-			panic(err)
+	for _, entry := range os.Environ() {
+		if name, _, _ := strings.Cut(entry, "="); strings.HasPrefix(name, "HERMETIC_") {
+			if err := os.Unsetenv(name); err != nil {
+				panic(err)
+			}
 		}
 	}
+	// What cli.Main sets before Run, for the tests that run it in-process.
+	dirs.SetAppName(binName)
 
 	m.Run()
 }
@@ -74,25 +84,25 @@ func TestDownloadsRefuseTLS12(t *testing.T) {
 	project := t.TempDir()
 	write(
 		t,
-		filepath.Join(project, hermetic.ProjectDir, hermetic.ProjectConfig),
+		filepath.Join(project, projectdir.Dir, projectdir.Config),
 		"checksum:\n  enabled: true\nregistries:\n  - name: local\n    type: local\n    path: registry.yaml\npackages:\n  - name: probe/probe@v1.0.0\n    registry: local\n",
 	)
 	write(
 		t,
-		filepath.Join(project, hermetic.ProjectDir, "registry.yaml"),
+		filepath.Join(project, projectdir.Dir, "registry.yaml"),
 		"packages:\n  - type: http\n    repo_owner: probe\n    repo_name: probe\n    url: "+server.URL+"/probe-{{.Version}}.tar.gz\n    format: tar.gz\n",
 	)
-	write(t, filepath.Join(project, hermetic.ProjectDir, hermetic.ProjectPolicy),
+	write(t, filepath.Join(project, projectdir.Dir, projectdir.Policy),
 		"registries:\n  - name: local\n    type: local\n    path: registry.yaml\npackages:\n  - registry: local\n")
 
-	env := append(os.Environ(), asBinary+"=1", hermetic.RootEnv+"="+root)
+	env := append(os.Environ(), asBinary+"=1", rootDirVar+"="+root)
 
 	allow := exec.CommandContext(
 		t.Context(),
 		binary,
 		"policy",
 		"allow",
-		filepath.Join(hermetic.ProjectDir, hermetic.ProjectPolicy),
+		filepath.Join(projectdir.Dir, projectdir.Policy),
 	)
 
 	allow.Dir, allow.Env = project, env
@@ -158,7 +168,7 @@ func binaryNamed(t *testing.T) string {
 		t.Fatal(err)
 	}
 
-	name := hermetic.Name
+	name := binName
 	if runtime.GOOS == "windows" {
 		name += ".exe"
 	}
