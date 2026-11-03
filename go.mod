@@ -3,7 +3,7 @@ module github.com/forkcloser/hermetic
 go 1.27.3
 
 require (
-	github.com/alecthomas/kong v1.16.1
+	github.com/alecthomas/kong v1.17.0
 	github.com/aquaproj/aqua/v2 v2.65.2
 	github.com/mycophonic/primordium v0.15.1
 )
