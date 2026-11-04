@@ -188,8 +188,12 @@ because the library writes it beside the config under a fixed name.
 aqua's own finder walks upward for `aqua.yaml`, `.aqua/aqua.yaml` and their
 variants, library constants, but `AQUA_CONFIG` names one config file outright. So
 `hermetic` does the walk itself, upward from the working directory for
-`.hermetic/hermetic.yaml`, and sets `AQUA_CONFIG` to what it finds before the
-library runs. `-c` and `HERMETIC_CONFIG` win over the walk, for the recipe
+`.hermetic/hermetic.yaml`, and names what it finds as the library's config. The
+walk stops at the repository boundary, a directory holding `.git` (the
+directory, or the file a worktree or a submodule has): a repository, or a
+worktree, with no manifest of its own has no project, never an enclosing
+repository's (DX.md, "A directory's project is the nearest manifest, within its
+repository"). `-c` and `HERMETIC_CONFIG` win over the walk, for the recipe
 that runs on a scratch copy of the manifest, and the named config carries its
 project: the policy beside the manifest, through the same gate as a walked one,
 so a job that names the checkout's manifest resolves the checkout's pins from any

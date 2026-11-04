@@ -17,9 +17,11 @@ const (
 	Policy = "policy.yaml"
 )
 
-// Find walks upward from wd for Dir/Config and returns the
-// project directory's absolute path, "" when no directory up to the filesystem
-// root carries one.
+// Find walks upward from wd for Dir/Config and returns the project directory's
+// absolute path; "" when there is none. The walk stops at the repository
+// boundary, a directory holding .git (a directory, or the file a worktree or a
+// submodule has): a repository's project is its own manifest or none, never an
+// enclosing repository's.
 func Find(wd string) (string, error) {
 	dir, err := filepath.Abs(wd)
 	if err != nil {
@@ -29,13 +31,18 @@ func Find(wd string) (string, error) {
 	for {
 		candidate := filepath.Join(dir, Dir)
 
-		_, err := os.Stat(filepath.Join(candidate, Config))
-		switch {
-		case err == nil:
+		found, err := exists(filepath.Join(candidate, Config))
+		if err != nil {
+			return "", err
+		}
+
+		if found {
 			return candidate, nil
-		case errors.Is(err, fs.ErrNotExist):
-		default:
-			return "", fmt.Errorf("look for %s: %w", filepath.Join(candidate, Config), err)
+		}
+
+		boundary, err := exists(filepath.Join(dir, ".git"))
+		if err != nil || boundary {
+			return "", err
 		}
 
 		parent := filepath.Dir(dir)
@@ -44,5 +51,20 @@ func Find(wd string) (string, error) {
 		}
 
 		dir = parent
+	}
+}
+
+// exists reports whether path names anything; an error other than its absence
+// is returned, since a walk cannot know what it did not see.
+func exists(path string) (bool, error) {
+	_, err := os.Stat(path)
+
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, fs.ErrNotExist):
+		return false, nil
+	default:
+		return false, fmt.Errorf("look for %s: %w", path, err)
 	}
 }
