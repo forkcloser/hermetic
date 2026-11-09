@@ -87,15 +87,14 @@ sboms:
 # A local run is `--local --dry-run`, which skips signing: there is no
 # key-based lane (book/releasing.md).
 signs:
-  - cmd: cosign
+  - cmd: just
     artifacts: checksum
     signature: "${artifact}.sigstore.json"
     args:
-      - sign-blob
-      - --yes
-      - --bundle
-      - "${signature}"
+      - do
+      - release-sign
       - "${artifact}"
+      - "${signature}"
 
 release:
   # Any prerelease-suffixed tag is published as a GitHub prerelease, so it can
