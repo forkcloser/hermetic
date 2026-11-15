@@ -48,6 +48,33 @@ func TestMain(m *testing.M) {
 			}
 		}
 	}
+	// Under coverage every child run as the binary writes the same meta-data
+	// file into GOCOVERDIR at exit, and two of them renaming onto it at once
+	// fail on Windows, on stderr. One child run alone first writes it; the
+	// rest find it there.
+	if testing.CoverMode() != "" {
+		scratch, err := os.MkdirTemp("", "")
+		if err != nil {
+			panic(err)
+		}
+
+		first := exec.CommandContext(context.Background(), os.Args[0], "--help")
+		first.Args[0] = binName
+		first.Dir = scratch
+		first.Env = append(os.Environ(), asBinary+"=1", rootDirVar+"="+scratch)
+
+		out, err := first.CombinedOutput()
+		_ = os.RemoveAll(scratch)
+
+		if err != nil {
+			panic(string(out) + err.Error())
+		}
+
+		if written, _ := filepath.Glob(filepath.Join(os.Getenv("GOCOVERDIR"), "covmeta.*")); len(written) == 0 {
+			panic("the first child wrote no coverage meta-data file in GOCOVERDIR")
+		}
+	}
+
 	// What cli.Main sets before Run, for the tests that run it in-process.
 	dirs.SetAppName(binName)
 
